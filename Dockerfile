@@ -24,6 +24,9 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 
 COPY --from=builder /out/server /app/server
+COPY web /app/web
+
+ENV WEB_DIR=/app/web
 
 EXPOSE 50051 8080
 USER nobody

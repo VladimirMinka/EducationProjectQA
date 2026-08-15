@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -115,6 +117,54 @@ func runHTTPGateway(ctx context.Context, grpcEndpoint, httpPort string) error {
 		return fmt.Errorf("register promo gateway: %w", err)
 	}
 
-	fmt.Printf("Starting HTTP gateway on %s...\n", httpPort)
-	return http.ListenAndServe(httpPort, mux)
+	webDir := os.Getenv("WEB_DIR")
+	if webDir == "" {
+		webDir = "web"
+	}
+
+	fmt.Printf("Starting HTTP gateway + UI on %s (web=%s)...\n", httpPort, webDir)
+	return http.ListenAndServe(httpPort, withCORS(withUI(mux, webDir)))
+}
+
+func withUI(api http.Handler, webDir string) http.Handler {
+	fs := http.Dir(webDir)
+	fileServer := http.FileServer(fs)
+	index := filepath.Join(webDir, "index.html")
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			api.ServeHTTP(w, r)
+			return
+		}
+
+		f, err := fs.Open(r.URL.Path)
+		if err == nil {
+			stat, statErr := f.Stat()
+			_ = f.Close()
+			if statErr == nil && !stat.IsDir() {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		http.ServeFile(w, r, index)
+	})
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept")
+		w.Header().Set("Access-Control-Expose-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

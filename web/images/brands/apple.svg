@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480" role="img" aria-label="Apple">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a2330"/>
+      <stop offset="100%" stop-color="#2c3644"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="480" fill="url(#g)"/>
+  <rect x="40" y="40" width="560" height="400" rx="28" fill="none" stroke="#8aa3ad" stroke-opacity="0.25" stroke-width="2"/>
+  <g transform="translate(320 230)">
+    <path fill="#e8f2f4" fill-opacity="0.92" d="M40-18c-2-12 8-24 20-28-8 14-2 30 10 38-12 2-26-2-30-10zm48 8c-20-2-36 14-48 14s-26-10-46-10c-24 2-46 16-46 48 0 34 28 74 52 74 12 0 20-10 38-10s24 10 40 10c24 0 44-36 44-36-18-10-28-30-28-48 0-20 12-34-6-52-10-10-24-12-36-10z"/>
+  </g>
+  <text x="320" y="420" text-anchor="middle" fill="#8aa3ad" font-family="system-ui,sans-serif" font-size="22" font-weight="600" letter-spacing="4">APPLE</text>
+</svg>

@@ -11,6 +11,36 @@ API reference: [`Docs.MD`](Docs.MD) · Project overview: [`README.md`](README.md
 
 ---
 
+## Release 0.6.0 — 2026-08-14
+
+**Theme:** Web UI (login, catalog, cart)
+
+### Added
+
+- **Static SPA** under [`web/`](web/) — hash routes `#/login`, `#/catalog`, `#/cart`
+- Login / register against REST; JWT session in `localStorage`
+- Catalog with brand filters and add-to-cart
+- Cart: remove/clear, promocode apply/clear, totals (subtotal/discount/total, combo flag, TTL), checkout via `POST /v1/orders`
+- HTTP gateway serves UI from `WEB_DIR` (default `web`); API remains under `/v1/`
+- CORS on the HTTP gateway for browser clients
+- `data-testid` attributes for UI automation
+
+### Changed
+
+- **Dockerfile** copies `web/` and sets `WEB_DIR=/app/web`
+- [`README.md`](README.md) documents UI at `http://localhost:8080/`
+
+### Migrations
+
+- None
+
+### Breaking / QA impact
+
+- Open `http://localhost:8080/` for UI smoke; REST contract unchanged
+- Cover login/register, catalog filter + add, cart promo + checkout paths in UI tests
+
+---
+
 ## Release 0.5.1 — 2026-08-05
 
 **Theme:** Hard delete order + Docker protobuf codegen

@@ -15,6 +15,7 @@ gRPC store backend with a JSON HTTP gateway. Catalog, cart, order, user, and adm
 - **Cart** — add/remove items, get/clear cart, apply/clear promocode, 30m TTL (**JWT required**)
 - **Orders** — create from cart, get, cancel, update status, **hard delete** (any status); auto `PAID`→`SHIPPED`→`COMPLETED` (**JWT required**)
 - **Admin promocodes** — CRUD under `/v1/admin/promocodes` (**admin JWT**)
+- **Web UI** — login / catalog / cart SPA at `http://localhost:8080/` (same port as REST)
 - **Dual transport** — native gRPC (`:50051`) and REST/JSON via grpc-gateway (`:8080`)
 - **PostgreSQL** — persistent storage via `pgx` + `database/sql`
 
@@ -36,7 +37,7 @@ docker compose up --build
 Use `-v` when schema migrations changed so init scripts re-run on a fresh volume.
 
 - gRPC: `localhost:50051`
-- HTTP: `localhost:8080`
+- HTTP API + UI: `localhost:8080` (UI at `/`, REST under `/v1/...`)
 - Postgres: `localhost:5432` (user/password/db: `store` / `store` / `store`)
 
 ### Local (API on host, Postgres in Docker)
@@ -52,11 +53,15 @@ Defaults if unset:
 
 - `DATABASE_URL` → `postgres://store:store@localhost:5432/store?sslmode=disable`
 - `JWT_SECRET` → `dev-secret-change-me`
+- `WEB_DIR` → `web` (static UI files)
+
+UI: open `http://localhost:8080/` after the server starts (login / catalog / cart).
 
 ## Project layout
 
 ```
-cmd/server/          # entrypoint (gRPC + HTTP gateway)
+cmd/server/          # entrypoint (gRPC + HTTP gateway + UI)
+web/                 # static SPA (login, catalog, cart)
 proto/               # Catalog, Cart, Order, User, Promo contracts
 gen/                 # generated Go / gRPC / gateway code
 migrations/          # Postgres schema + seed (applied on first DB init)
@@ -273,5 +278,5 @@ Docker image builds run `make generate` in the builder stage (protoc + plugins i
 | Port  | Protocol              |
 |-------|-----------------------|
 | 50051 | gRPC                  |
-| 8080  | HTTP JSON (gateway)   |
+| 8080  | HTTP JSON (gateway) + Web UI |
 | 5432  | PostgreSQL            |
