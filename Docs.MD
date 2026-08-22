@@ -6,10 +6,12 @@
 
 | Порт  | Протокол                         |
 |-------|----------------------------------|
-| 8080  | HTTP REST (JSON, grpc-gateway)   |
+| 8081  | HTTP REST + UI через Docker Compose (host → container 8080) |
+| 8080  | HTTP REST (JSON, grpc-gateway) локально / внутри контейнера |
 | 50051 | gRPC                             |
 
-Базовый URL REST: `http://localhost:8080`
+Базовый URL REST (Docker): `http://localhost:8081`  
+Базовый URL REST (локальный `go run`): `http://localhost:8080`
 
 JSON от gateway — **camelCase** (`userId`, `accessToken`, `totalPriceCents`, …).
 

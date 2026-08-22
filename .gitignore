@@ -1,0 +1,54 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/simulator-mac
+/bin/
+/dist/
+
+# Go build / test / coverage
+/vendor/
+*.coverprofile
+coverage.out
+coverage.html
+*.prof
+
+# Generated protobuf / gRPC code
+/gen/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+.tmp/
+tmp/
+*.log
+
+# Trainer-only intentional bugs (do not commit)
+docs/BUGS.md
+
+# Trainer-only UI locator cheat sheet (mentees discover locators themselves)
+web/LOCATORS.md
+
+# Frontend (Vue / Vite)
+web/node_modules/
+web/dist/

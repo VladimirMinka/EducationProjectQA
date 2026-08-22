@@ -24,12 +24,3 @@ export function setSession(auth) {
 export function clearSession() {
   localStorage.removeItem(SESSION_KEY);
 }
-
-export function requireSession() {
-  const session = getSession();
-  if (!session) {
-    location.hash = "#/login";
-    return null;
-  }
-  return session;
-}

@@ -119,7 +119,7 @@ func runHTTPGateway(ctx context.Context, grpcEndpoint, httpPort string) error {
 
 	webDir := os.Getenv("WEB_DIR")
 	if webDir == "" {
-		webDir = "web"
+		webDir = "web/dist"
 	}
 
 	fmt.Printf("Starting HTTP gateway + UI on %s (web=%s)...\n", httpPort, webDir)

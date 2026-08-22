@@ -11,6 +11,29 @@ API reference: [`Docs.MD`](Docs.MD) · Project overview: [`README.md`](README.md
 
 ---
 
+## Release 0.7.0 — 2026-08-16
+
+**Theme:** Vue 3 frontend
+
+### Added / Changed
+
+- Replaced vanilla JS SPA with **Vue 3 + Vite + vue-router** (hash routes unchanged: `#/login`, `#/catalog`, `#/cart`)
+- UI build output: `web/dist`; gateway default `WEB_DIR=web/dist`
+- **Dockerfile** multi-stage: Node builds UI, then Go builds API; serves `web/dist`
+- Same REST flows and `data-testid` locators for QA automation
+- Local UI: `cd web && npm install && npm run build` (or `npm run dev` with API proxy)
+
+### Migrations
+
+- None
+
+### Breaking / QA impact
+
+- Docker rebuild required to pick up Vue build
+- Locators preserved; smoke UI paths unchanged
+
+---
+
 ## Release 0.6.0 — 2026-08-14
 
 **Theme:** Web UI (login, catalog, cart)

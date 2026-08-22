@@ -15,14 +15,15 @@ gRPC store backend with a JSON HTTP gateway. Catalog, cart, order, user, and adm
 - **Cart** — add/remove items, get/clear cart, apply/clear promocode, 30m TTL (**JWT required**)
 - **Orders** — create from cart, get, cancel, update status, **hard delete** (any status); auto `PAID`→`SHIPPED`→`COMPLETED` (**JWT required**)
 - **Admin promocodes** — CRUD under `/v1/admin/promocodes` (**admin JWT**)
-- **Web UI** — login / catalog / cart SPA at `http://localhost:8080/` (same port as REST)
-- **Dual transport** — native gRPC (`:50051`) and REST/JSON via grpc-gateway (`:8080`)
+- **Web UI** — Vue 3 SPA (login / catalog / cart); Docker: `http://localhost:8081/`, local `go run`: `:8080`
+- **Dual transport** — native gRPC (`:50051`) and REST/JSON via grpc-gateway (Docker host `:8081`, process `:8080`)
 - **PostgreSQL** — persistent storage via `pgx` + `database/sql`
 
 ## Requirements
 
 - Go **1.26+**
 - Docker & Docker Compose (Postgres runs in Docker — no local Postgres install needed)
+- For UI local build: Node.js **20+** (npm)
 - For codegen: `protoc`, `protoc-gen-go`, `protoc-gen-go-grpc`, `protoc-gen-grpc-gateway`
 
 ## Quick start
@@ -37,31 +38,43 @@ docker compose up --build
 Use `-v` when schema migrations changed so init scripts re-run on a fresh volume.
 
 - gRPC: `localhost:50051`
-- HTTP API + UI: `localhost:8080` (UI at `/`, REST under `/v1/...`)
+- HTTP API + UI (Docker): `localhost:8081` (UI at `/`, REST under `/v1/...`)
 - Postgres: `localhost:5432` (user/password/db: `store` / `store` / `store`)
 
 ### Local (API on host, Postgres in Docker)
 
 ```bash
 docker compose up -d postgres
+cd web && npm install && npm run build && cd ..
 DATABASE_URL='postgres://store:store@localhost:5432/store?sslmode=disable' \
 JWT_SECRET='dev-secret-change-me' \
 go run ./cmd/server
+```
+
+UI dev server (hot reload, proxies `/v1` → `:8080`):
+
+```bash
+# terminal 1: API
+docker compose up -d postgres
+DATABASE_URL='postgres://store:store@localhost:5432/store?sslmode=disable' go run ./cmd/server
+
+# terminal 2: Vue
+cd web && npm install && npm run dev
 ```
 
 Defaults if unset:
 
 - `DATABASE_URL` → `postgres://store:store@localhost:5432/store?sslmode=disable`
 - `JWT_SECRET` → `dev-secret-change-me`
-- `WEB_DIR` → `web` (static UI files)
+- `WEB_DIR` → `web/dist` (Vite production build output)
 
-UI: open `http://localhost:8080/` after the server starts (login / catalog / cart).
+UI: open `http://localhost:8081/` with Docker, or `http://localhost:8080/` when running `go run ./cmd/server` locally.
 
 ## Project layout
 
 ```
 cmd/server/          # entrypoint (gRPC + HTTP gateway + UI)
-web/                 # static SPA (login, catalog, cart)
+web/                 # Vue 3 + Vite SPA (build → web/dist)
 proto/               # Catalog, Cart, Order, User, Promo contracts
 gen/                 # generated Go / gRPC / gateway code
 migrations/          # Postgres schema + seed (applied on first DB init)
@@ -278,5 +291,6 @@ Docker image builds run `make generate` in the builder stage (protoc + plugins i
 | Port  | Protocol              |
 |-------|-----------------------|
 | 50051 | gRPC                  |
-| 8080  | HTTP JSON (gateway) + Web UI |
+| 8081  | HTTP JSON + Web UI (Docker host → container `:8080`) |
+| 8080  | HTTP JSON + Web UI (local `go run` / inside container) |
 | 5432  | PostgreSQL            |
