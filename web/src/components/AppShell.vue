@@ -46,7 +46,14 @@ function onLogout() {
 }
 
 onMounted(refreshCartCount);
-watch(() => route.fullPath, refreshCartCount);
+// Cart/Checkout сами грузят корзину и обновляют badge — не дублируем GET /cart.
+watch(
+  () => route.fullPath,
+  () => {
+    if (route.name === "cart" || route.name === "checkout") return;
+    refreshCartCount();
+  }
+);
 
 defineExpose({ refreshCartCount, setCartCount: (n) => { cartCount.value = Number(n) || 0; } });
 </script>
@@ -83,6 +90,15 @@ defineExpose({ refreshCartCount, setCartCount: (n) => { cartCount.value = Number
             :data-count="cartCount"
             :hidden="cartCount <= 0"
           >{{ cartCount }}</span>
+        </RouterLink>
+        <RouterLink
+          :to="{ name: 'orders' }"
+          data-testid="nav-orders"
+          data-nav="orders"
+          :class="{ active: active === 'orders' }"
+          :aria-current="active === 'orders' ? 'page' : 'false'"
+        >
+          Заказы
         </RouterLink>
         <button
           type="button"

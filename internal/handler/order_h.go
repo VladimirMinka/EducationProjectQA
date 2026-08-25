@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -33,12 +34,18 @@ func mapOrderToProto(order repository.Order) *pb.Order {
 		})
 	}
 
+	created := ""
+	if !order.CreatedAt.IsZero() {
+		created = order.CreatedAt.UTC().Format(time.RFC3339)
+	}
+
 	return &pb.Order{
 		Id:               order.ID,
 		UserId:           order.UserID,
 		Items:            items,
 		TotalAmountCents: order.TotalAmountCents,
 		Status:           pb.OrderStatus(order.Status),
+		CreatedAt:        created,
 	}
 }
 
@@ -66,6 +73,31 @@ func (h *OrderHandler) CreateOrder(ctx context.Context, req *pb.CreateOrderReque
 	}
 
 	return &pb.OrderResponse{Order: mapOrderToProto(order)}, nil
+}
+
+func (h *OrderHandler) ListOrders(ctx context.Context, req *pb.ListOrdersRequest) (*pb.ListOrdersResponse, error) {
+	if req.GetUserId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "user_id обязателен")
+	}
+	if !callerIsAdmin(ctx) {
+		if err := ensureCallerMatchesUser(ctx, req.GetUserId()); err != nil {
+			return nil, err
+		}
+	}
+
+	orders, err := h.svc.ListOrders(req.GetUserId(), auth.UserIDFromContext(ctx), callerIsAdmin(ctx))
+	if err != nil {
+		if mapped := mapUserNotFound(err); mapped != nil {
+			return nil, mapped
+		}
+		return nil, mapOrderErr(err)
+	}
+
+	out := make([]*pb.Order, 0, len(orders))
+	for _, order := range orders {
+		out = append(out, mapOrderToProto(order))
+	}
+	return &pb.ListOrdersResponse{Orders: out}, nil
 }
 
 func (h *OrderHandler) GetOrder(ctx context.Context, req *pb.GetOrderRequest) (*pb.OrderResponse, error) {

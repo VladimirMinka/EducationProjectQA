@@ -15,7 +15,7 @@ gRPC store backend with a JSON HTTP gateway. Catalog, cart, order, user, and adm
 - **Cart** — add/remove items, get/clear cart, apply/clear promocode, 30m TTL (**JWT required**)
 - **Orders** — create from cart, get, cancel, update status, **hard delete** (any status); auto `PAID`→`SHIPPED`→`COMPLETED` (**JWT required**)
 - **Admin promocodes** — CRUD under `/v1/admin/promocodes` (**admin JWT**)
-- **Web UI** — Vue 3 SPA (login / catalog / cart); Docker: `http://localhost:8081/`, local `go run`: `:8080`
+- **Web UI** — Vue 3 SPA (login / catalog / cart / checkout / orders); Docker: `http://localhost:8081/`, local `go run`: `:8080`
 - **Dual transport** — native gRPC (`:50051`) and REST/JSON via grpc-gateway (Docker host `:8081`, process `:8080`)
 - **PostgreSQL** — persistent storage via `pgx` + `database/sql`
 
@@ -179,6 +179,7 @@ Apply promocode:
 
 ```http
 POST   /v1/orders
+GET    /v1/users/{user_id}/orders
 GET    /v1/orders/{order_id}
 POST   /v1/orders/{order_id}/cancel
 POST   /v1/orders/{order_id}/status

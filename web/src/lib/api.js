@@ -52,12 +52,32 @@ export function formatMoney(centsValue) {
   }).format(cents(centsValue) / 100);
 }
 
+let productsCache = null;
+let productsInflight = null;
+
+function listProductsCached() {
+  if (productsCache) return Promise.resolve(productsCache);
+  if (!productsInflight) {
+    productsInflight = request("/v1/products")
+      .then((data) => {
+        productsCache = data;
+        productsInflight = null;
+        return data;
+      })
+      .catch((err) => {
+        productsInflight = null;
+        throw err;
+      });
+  }
+  return productsInflight;
+}
+
 export const api = {
   register: (payload) =>
     request("/v1/users/register", { method: "POST", body: payload }),
   login: (payload) =>
     request("/v1/users/login", { method: "POST", body: payload }),
-  listProducts: () => request("/v1/products"),
+  listProducts: () => listProductsCached(),
   getCart: (userId, token) =>
     request(`/v1/users/${userId}/cart`, { token }),
   addItem: (userId, token, productId, quantity = 1) =>
@@ -89,5 +109,20 @@ export const api = {
       method: "POST",
       token,
       body: { user_id: userId },
+    }),
+  listOrders: (userId, token) =>
+    request(`/v1/users/${userId}/orders`, { token }),
+  getOrder: (orderId, token) => request(`/v1/orders/${orderId}`, { token }),
+  cancelOrder: (orderId, token) =>
+    request(`/v1/orders/${orderId}/cancel`, {
+      method: "POST",
+      token,
+      body: {},
+    }),
+  updateOrderStatus: (orderId, token, fromStatus, toStatus) =>
+    request(`/v1/orders/${orderId}/status`, {
+      method: "POST",
+      token,
+      body: { fromStatus, toStatus },
     }),
 };

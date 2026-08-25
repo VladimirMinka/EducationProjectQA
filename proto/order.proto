@@ -39,6 +39,12 @@ service OrderService {
       delete: "/v1/orders/{order_id}"
     };
   }
+
+  rpc ListOrders (ListOrdersRequest) returns (ListOrdersResponse) {
+    option (google.api.http) = {
+      get: "/v1/users/{user_id}/orders"
+    };
+  }
 }
 
 enum OrderStatus {
@@ -62,10 +68,19 @@ message Order {
   repeated OrderItem items = 3;
   int64 total_amount_cents = 4;
   OrderStatus status = 5;
+  string created_at = 6;
 }
 
 message CreateOrderRequest {
   string user_id = 1;
+}
+
+message ListOrdersRequest {
+  string user_id = 1;
+}
+
+message ListOrdersResponse {
+  repeated Order orders = 1;
 }
 
 message GetOrderRequest {

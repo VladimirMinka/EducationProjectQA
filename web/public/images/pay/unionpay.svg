@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 32" role="img" aria-label="UnionPay">
+  <rect width="48" height="32" rx="4" fill="#fff"/>
+  <rect x="6" y="6" width="10" height="20" rx="1" fill="#e21836"/>
+  <rect x="19" y="6" width="10" height="20" rx="1" fill="#00447c"/>
+  <rect x="32" y="6" width="10" height="20" rx="1" fill="#00853f"/>
+</svg>

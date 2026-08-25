@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
 	"log"
@@ -66,8 +67,9 @@ func main() {
 	orderService := service.NewOrderService(orderRepo, cartService, catalogService, userService)
 	orderHandler := handler.NewOrderHandler(orderService)
 
-	grpcPort := ":50051"
-	lis, err := net.Listen("tcp", grpcPort)
+	// Listen on all interfaces; dial via explicit IPv4 loopback (see GRPC_ENDPOINT).
+	grpcListen := ":50051"
+	lis, err := net.Listen("tcp", grpcListen)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
@@ -85,14 +87,20 @@ func main() {
 	reflection.Register(grpcServer)
 
 	go func() {
-		fmt.Printf("Starting gRPC Simulator on %s...\n", grpcPort)
+		fmt.Printf("Starting gRPC Simulator on %s...\n", grpcListen)
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("failed to serve gRPC: %v", err)
 		}
 	}()
 
+	grpcDial := os.Getenv("GRPC_ENDPOINT")
+	if grpcDial == "" {
+		// Не `:50051`: NewClient лениво резолвит и в Alpine часто сначала ::1 (~8s hang).
+		grpcDial = "127.0.0.1:50051"
+	}
+
 	httpPort := ":8080"
-	if err := runHTTPGateway(context.Background(), grpcPort, httpPort); err != nil {
+	if err := runHTTPGateway(context.Background(), grpcDial, httpPort); err != nil {
 		log.Fatalf("failed to serve HTTP gateway: %v", err)
 	}
 }
@@ -101,20 +109,39 @@ func runHTTPGateway(ctx context.Context, grpcEndpoint, httpPort string) error {
 	mux := runtime.NewServeMux()
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 
-	if err := pbUser.RegisterUserServiceHandlerFromEndpoint(ctx, mux, grpcEndpoint, opts); err != nil {
+	// Один долгоживущий conn на все сервисы: иначе каждый FromEndpoint
+	// лениво диалит свой канал → первый hit в cart и orders по ~8s каждый.
+	conn, err := grpc.NewClient(grpcEndpoint, opts...)
+	if err != nil {
+		return fmt.Errorf("dial grpc %s: %w", grpcEndpoint, err)
+	}
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
+
+	if err := pbUser.RegisterUserServiceHandler(ctx, mux, conn); err != nil {
 		return fmt.Errorf("register user gateway: %w", err)
 	}
-	if err := pbCatalog.RegisterCatalogServiceHandlerFromEndpoint(ctx, mux, grpcEndpoint, opts); err != nil {
+	if err := pbCatalog.RegisterCatalogServiceHandler(ctx, mux, conn); err != nil {
 		return fmt.Errorf("register catalog gateway: %w", err)
 	}
-	if err := pbCart.RegisterCartServiceHandlerFromEndpoint(ctx, mux, grpcEndpoint, opts); err != nil {
+	if err := pbCart.RegisterCartServiceHandler(ctx, mux, conn); err != nil {
 		return fmt.Errorf("register cart gateway: %w", err)
 	}
-	if err := pbOrder.RegisterOrderServiceHandlerFromEndpoint(ctx, mux, grpcEndpoint, opts); err != nil {
+	if err := pbOrder.RegisterOrderServiceHandler(ctx, mux, conn); err != nil {
 		return fmt.Errorf("register order gateway: %w", err)
 	}
-	if err := pbPromo.RegisterPromoServiceHandlerFromEndpoint(ctx, mux, grpcEndpoint, opts); err != nil {
+	if err := pbPromo.RegisterPromoServiceHandler(ctx, mux, conn); err != nil {
 		return fmt.Errorf("register promo gateway: %w", err)
+	}
+
+	warmCtx, warmCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer warmCancel()
+	if err := warmGateway(warmCtx, conn); err != nil {
+		log.Printf("warmup warning: %v", err)
+	} else {
+		log.Printf("warmup ok (grpc dial %s)", grpcEndpoint)
 	}
 
 	webDir := os.Getenv("WEB_DIR")
@@ -122,8 +149,26 @@ func runHTTPGateway(ctx context.Context, grpcEndpoint, httpPort string) error {
 		webDir = "web/dist"
 	}
 
-	fmt.Printf("Starting HTTP gateway + UI on %s (web=%s)...\n", httpPort, webDir)
-	return http.ListenAndServe(httpPort, withCORS(withUI(mux, webDir)))
+	fmt.Printf("Starting HTTP gateway + UI on %s (web=%s, grpc=%s)...\n", httpPort, webDir, grpcEndpoint)
+	return http.ListenAndServe(httpPort, withCORS(withGzip(withStaticCache(withUI(mux, webDir)))))
+}
+
+// warmGateway устанавливает gRPC-канал и прогревает каталог/БД до первого пользовательского запроса.
+func warmGateway(ctx context.Context, conn *grpc.ClientConn) error {
+	client := pbCatalog.NewCatalogServiceClient(conn)
+	var last error
+	for attempt := 0; attempt < 20; attempt++ {
+		if ctx.Err() != nil {
+			return fmt.Errorf("warmup canceled: %w (last: %v)", ctx.Err(), last)
+		}
+		_, err := client.ListProducts(ctx, &pbCatalog.ListProductsRequest{})
+		if err == nil {
+			return nil
+		}
+		last = err
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("list products: %w", last)
 }
 
 func withUI(api http.Handler, webDir string) http.Handler {
@@ -166,5 +211,71 @@ func withCORS(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func withStaticCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/assets/"):
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		case strings.HasPrefix(r.URL.Path, "/images/"):
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func gzippable(path string) bool {
+	switch {
+	case strings.HasSuffix(path, ".png"),
+		strings.HasSuffix(path, ".jpg"),
+		strings.HasSuffix(path, ".jpeg"),
+		strings.HasSuffix(path, ".webp"),
+		strings.HasSuffix(path, ".gif"),
+		strings.HasSuffix(path, ".woff2"),
+		strings.HasSuffix(path, ".woff"):
+		return false
+	default:
+		return true
+	}
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz          *gzip.Writer
+	wroteHeader bool
+}
+
+func (w *gzipResponseWriter) WriteHeader(code int) {
+	w.Header().Del("Content-Length")
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.gz.Write(b)
+}
+
+func withGzip(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead ||
+			!strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
+			!gzippable(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gz, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		defer gz.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
 	})
 }

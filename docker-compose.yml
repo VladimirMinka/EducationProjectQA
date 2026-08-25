@@ -5,6 +5,13 @@ services:
       POSTGRES_USER: store
       POSTGRES_PASSWORD: store
       POSTGRES_DB: store
+    # local-only: меньше fsync, быстрее первый SELECT после старта контейнера.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - synchronous_commit=off
     ports:
       - "5432:5432"
     volumes:
@@ -25,6 +32,8 @@ services:
     environment:
       DATABASE_URL: postgres://store:store@postgres:5432/store?sslmode=disable
       JWT_SECRET: dev-secret-change-me
+      # IPv4 loopback: `:50051` внутри Alpine иногда сначала идёт в IPv6 и подвисает.
+      GRPC_ENDPOINT: 127.0.0.1:50051
     depends_on:
       postgres:
         condition: service_healthy

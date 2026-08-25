@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -116,6 +117,92 @@ func (r *OrderRepository) loadItems(ctx context.Context, orderID string) ([]repo
 		return nil, fmt.Errorf("get order items rows: %w", err)
 	}
 	return items, nil
+}
+
+func (r *OrderRepository) ListOrders(userID string) ([]repository.Order, error) {
+	ctx := context.Background()
+	const q = `
+		SELECT id, user_id, total_amount_cents, status, created_at, updated_at
+		FROM orders
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, q, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list orders: %w", err)
+	}
+	defer rows.Close()
+
+	orders := make([]repository.Order, 0)
+	for rows.Next() {
+		var order repository.Order
+		if err := rows.Scan(
+			&order.ID,
+			&order.UserID,
+			&order.TotalAmountCents,
+			&order.Status,
+			&order.CreatedAt,
+			&order.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan order: %w", err)
+		}
+		orders = append(orders, order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list orders rows: %w", err)
+	}
+
+	// Один SELECT вместо N+1: страница заказов иначе делает запрос на каждый заказ.
+	if err := r.loadItemsForOrders(ctx, orders); err != nil {
+		return nil, err
+	}
+	return orders, nil
+}
+
+func (r *OrderRepository) loadItemsForOrders(ctx context.Context, orders []repository.Order) error {
+	if len(orders) == 0 {
+		return nil
+	}
+
+	ids := make([]any, 0, len(orders))
+	placeholders := make([]string, 0, len(orders))
+	indexByID := make(map[string]int, len(orders))
+	for i := range orders {
+		orders[i].Items = make([]repository.OrderItem, 0)
+		indexByID[orders[i].ID] = i
+		ids = append(ids, orders[i].ID)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
+	}
+
+	q := fmt.Sprintf(`
+		SELECT order_id, product_id, quantity, price_cents
+		FROM order_items
+		WHERE order_id IN (%s)
+		ORDER BY order_id, product_id
+	`, strings.Join(placeholders, ","))
+
+	rows, err := r.db.QueryContext(ctx, q, ids...)
+	if err != nil {
+		return fmt.Errorf("list order items: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var orderID string
+		var item repository.OrderItem
+		if err := rows.Scan(&orderID, &item.ProductID, &item.Quantity, &item.PriceCents); err != nil {
+			return fmt.Errorf("scan order item: %w", err)
+		}
+		idx, ok := indexByID[orderID]
+		if !ok {
+			continue
+		}
+		orders[idx].Items = append(orders[idx].Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list order items rows: %w", err)
+	}
+	return nil
 }
 
 func (r *OrderRepository) UpdateOrderStatus(orderID string, fromStatus, toStatus int32) (repository.Order, error) {

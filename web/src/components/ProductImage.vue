@@ -59,8 +59,11 @@ function onError() {
     :class="{ 'is-broken': broken }"
     :src="src"
     :alt="alt || product.name || 'product'"
+    width="72"
+    height="72"
     data-testid="cart-item-image"
     loading="lazy"
+    decoding="async"
     @error="onError"
   />
 </template>

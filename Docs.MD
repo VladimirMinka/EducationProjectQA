@@ -323,7 +323,15 @@ GET /v1/orders/{order_id}
 
 При `GET` сервер может продвинуть `PAID`→`SHIPPED` / `SHIPPED`→`COMPLETED` по таймерам.
 
-### 3.3. Отменить заказ
+### 3.3. Список заказов пользователя
+
+```http
+GET /v1/users/{user_id}/orders
+```
+
+Владелец или admin. На каждом заказе те же авто-переходы статусов, что и на `GET` одного заказа.
+
+### 3.4. Отменить заказ
 
 ```http
 POST /v1/orders/{order_id}/cancel
@@ -331,7 +339,7 @@ POST /v1/orders/{order_id}/cancel
 
 Только из `CREATED`.
 
-### 3.4. Обновить статус
+### 3.5. Обновить статус
 
 ```http
 POST /v1/orders/{order_id}/status
@@ -344,7 +352,7 @@ POST /v1/orders/{order_id}/status
 }
 ```
 
-### 3.5. Удалить заказ
+### 3.6. Удалить заказ
 
 ```http
 DELETE /v1/orders/{order_id}
@@ -516,6 +524,7 @@ Reflection включён. Контракты: `proto/*.proto`.
 | `POST /v1/users/{user_id}/cart/promocode` | `CartService.ApplyPromocode` |
 | `DELETE /v1/users/{user_id}/cart/promocode` | `CartService.ClearPromocode` |
 | `POST /v1/orders` | `OrderService.CreateOrder` |
+| `GET /v1/users/{user_id}/orders` | `OrderService.ListOrders` |
 | `GET /v1/orders/{order_id}` | `OrderService.GetOrder` |
 | `POST /v1/orders/{order_id}/cancel` | `OrderService.CancelOrder` |
 | `POST /v1/orders/{order_id}/status` | `OrderService.UpdateOrderStatus` |

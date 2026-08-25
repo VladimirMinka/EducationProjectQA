@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 32" role="img" aria-label="MIR">
+  <rect width="48" height="32" rx="4" fill="#0b7a3b"/>
+  <rect x="0" y="0" width="48" height="32" rx="4" fill="#fff"/>
+  <path fill="#1b8f3a" d="M5.5 23V9.5h2.4l2.6 8.2 2.6-8.2H15.5V23h-2.1v-9.4L10.7 23H9.1L6.9 13.6V23H5.5z"/>
+  <path fill="#1b8f3a" d="M17.2 23V9.5h2.2v8.6L24.1 9.5h2.2V23h-2.2v-8.6L19.4 23h-2.2z"/>
+  <path fill="#1b8f3a" d="M27.4 23V9.5H33c2.6 0 4.2 1.5 4.2 3.7 0 1.9-1.2 3.3-3.2 3.6l3.8 6.2h-2.5l-3.6-5.8h-2.1V23h-2.2zm2.2-7.6h3.2c1.3 0 2.1-.7 2.1-1.7s-.8-1.7-2.1-1.7h-3.2v3.4z"/>
+  <path fill="#3bb54a" d="M39 8.8c3.8 2.4 6.2 6 7.2 10.2h-2.4C43 15.4 41 12.4 38 10.4L39 8.8z"/>
+</svg>

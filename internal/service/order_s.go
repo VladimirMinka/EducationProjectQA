@@ -29,6 +29,7 @@ var (
 type OrderRepository interface {
 	CreateOrder(order repository.Order) (repository.Order, error)
 	GetOrder(orderID string) (repository.Order, error)
+	ListOrders(userID string) ([]repository.Order, error)
 	UpdateOrderStatus(orderID string, fromStatus, toStatus int32) (repository.Order, error)
 	DeleteOrder(orderID string) error
 }
@@ -99,6 +100,33 @@ func (s *OrderService) CreateOrder(userID string) (repository.Order, error) {
 	_ = s.cart.ClearCart(userID)
 
 	return savedOrder, nil
+}
+
+func (s *OrderService) ListOrders(userID string, callerID string, isAdmin bool) ([]repository.Order, error) {
+	if userID == "" {
+		return nil, errors.New("user_id не может быть пустым")
+	}
+	if !isAdmin && userID != callerID {
+		return nil, ErrPermissionDenied
+	}
+	if _, err := s.users.GetUser(userID); err != nil {
+		return nil, fmt.Errorf("пользователь не найден: %w", err)
+	}
+
+	orders, err := s.repo.ListOrders(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]repository.Order, 0, len(orders))
+	for _, order := range orders {
+		updated, err := s.applyAutoProgression(order)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, updated)
+	}
+	return out, nil
 }
 
 func (s *OrderService) GetOrder(orderID string, callerID string, isAdmin bool) (repository.Order, error) {

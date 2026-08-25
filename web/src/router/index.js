@@ -3,6 +3,8 @@ import { getSession } from "../lib/auth";
 import LoginView from "../views/LoginView.vue";
 import CatalogView from "../views/CatalogView.vue";
 import CartView from "../views/CartView.vue";
+import CheckoutView from "../views/CheckoutView.vue";
+import OrdersView from "../views/OrdersView.vue";
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -11,6 +13,8 @@ const router = createRouter({
     { path: "/login", name: "login", component: LoginView, meta: { public: true } },
     { path: "/catalog", name: "catalog", component: CatalogView },
     { path: "/cart", name: "cart", component: CartView },
+    { path: "/checkout", name: "checkout", component: CheckoutView },
+    { path: "/orders", name: "orders", component: OrdersView },
     { path: "/:pathMatch(.*)*", redirect: "/catalog" },
   ],
 });

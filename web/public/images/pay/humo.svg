@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 32" role="img" aria-label="Humo">
+  <rect width="48" height="32" rx="4" fill="#0b6e5b"/>
+  <path fill="#f4d35e" d="M14 20c6-10 14-12 22-10-6 2-10 6-12 12-4-2-8-2-10-2z"/>
+  <text x="24" y="27" text-anchor="middle" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="7" letter-spacing="1">HUMO</text>
+</svg>

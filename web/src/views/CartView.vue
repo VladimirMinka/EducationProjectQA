@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { RouterLink } from "vue-router";
+import { RouterLink, useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import ProductImage from "../components/ProductImage.vue";
 import { api, formatMoney } from "../lib/api";
@@ -10,6 +10,7 @@ import { useToast } from "../composables/useToast";
 
 const { session } = useSession();
 const { showToast } = useToast();
+const router = useRouter();
 const shell = ref(null);
 
 const loading = ref(true);
@@ -17,7 +18,6 @@ const loadError = ref("");
 const productsById = ref(new Map());
 const cart = ref(null);
 const promoCode = ref("");
-const notice = ref("");
 const busy = ref(false);
 
 const items = computed(() => cart.value?.items || []);
@@ -84,17 +84,11 @@ async function clearPromo() {
 async function clearCart() {
   const s = session.value;
   cart.value = await api.clearCart(s.user.id, s.accessToken);
-  notice.value = "";
   showToast("Корзина очищена");
 }
 
-async function checkout() {
-  const s = session.value;
-  const res = await api.createOrder(s.user.id, s.accessToken);
-  const orderId = res?.order?.id || "—";
-  cart.value = await api.getCart(s.user.id, s.accessToken);
-  notice.value = `Заказ создан: ${orderId}`;
-  showToast("Заказ оформлен");
+function goCheckout() {
+  router.push({ name: "checkout" });
 }
 
 onMounted(async () => {
@@ -129,14 +123,6 @@ onMounted(async () => {
             {{ items.length ? `${totalQty} шт.` : "Пока пусто" }}
           </p>
         </div>
-      </div>
-      <div
-        v-if="notice"
-        class="alert alert-ok"
-        data-testid="cart-notice"
-        data-order-notice="true"
-      >
-        {{ notice }}
       </div>
       <div
         class="cart-layout"
@@ -273,9 +259,9 @@ onMounted(async () => {
             class="btn btn-primary"
             data-testid="checkout-button"
             :disabled="busy || !items.length"
-            @click="run(checkout)"
+            @click="goCheckout"
           >
-            Оформить заказ
+            К оформлению
           </button>
           <button
             type="button"
