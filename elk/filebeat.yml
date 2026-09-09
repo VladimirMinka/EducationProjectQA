@@ -1,0 +1,32 @@
+# Ship JSON stdout from the store container into Elasticsearch.
+filebeat.inputs:
+  - type: container
+    paths:
+      - "/var/lib/docker/containers/*/*.log"
+    processors:
+      - add_docker_metadata:
+          host: "unix:///var/run/docker.sock"
+      # Compose names containers like awesomeproject-store-1
+      - drop_event.when.not.contains:
+          container.name: "-store-"
+      # slog JSON is in the docker log "message" field
+      - decode_json_fields:
+          fields: ["message"]
+          target: ""
+          overwrite_keys: true
+          add_error_key: true
+
+processors:
+  - drop_fields:
+      fields: ["agent", "ecs", "host", "input", "log"]
+      ignore_missing: true
+
+# Default Filebeat data stream (filebeat-8.15.3) — works out of the box on ES 8.
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+
+setup.kibana:
+  host: "http://kibana:5601"
+
+logging.level: info
+logging.to_stderr: true

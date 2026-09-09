@@ -23,9 +23,9 @@ JSON от gateway — **camelCase** (`userId`, `accessToken`, `totalPriceCents`,
 
 | Область | Требование |
 |---------|------------|
-| Каталог, register, login, get user | Публично |
-| Корзина, заказы | `Authorization: Bearer <access_token>` |
-| Admin-промокоды `/v1/admin/*` | JWT с ролью `admin` |
+| Каталог, ПВЗ (list/get), register, login, get user | Публично |
+| Корзина, заказы, адреса | `Authorization: Bearer <access_token>` |
+| Admin-промокоды `/v1/admin/promocodes*`, jobs `/v1/admin/orders/*/jobs` | JWT с ролью `admin` |
 
 - TTL токена: **24 часа**.
 - В JWT: `sub` = user id, `role` = `user` \| `admin`.
@@ -84,7 +84,7 @@ JSON от gateway — **camelCase** (`userId`, `accessToken`, `totalPriceCents`,
 1. Коды **без учёта регистра** (`save10` ≡ `SAVE10`).
 2. Промокод и combo **не суммируются**: если оба применимы, действует **только промокод**.
 3. `ClearCart` очищает позиции **и** снимает промокод.
-4. Итог заказа при `POST /v1/orders` должен совпадать с итогом `GET` корзины (те же скидки).
+4. Итог позиций заказа при `POST /v1/orders` следует combo-правилам корзины (промокод на заказ **не** переносится — intentional). К итогу заказа **добавляется** `deliveryFeeCents`.
 
 **TTL корзины:** 30 минут неактивности. Обновляется при add / remove / clear / apply/clear promocode. **Не** обновляется от простого `GET` корзины. После истечения — пустая корзина.
 
@@ -159,29 +159,26 @@ Authorization: Bearer <access_token>
 GET /v1/products
 ```
 
-**Ответ `200`:**
+Query-параметры:
 
-```json
-{
-  "products": [
-    {
-      "id": "550e8400-e29b-41d4-a716-446655440001",
-      "name": "iPhone 15",
-      "description": "Apple smartphone with A16 Bionic",
-      "priceCents": "79900",
-      "stockQuantity": 40,
-      "brand": "apple"
-    }
-  ],
-  "nextPageToken": ""
-}
-```
+| Параметр | Описание |
+|----------|----------|
+| `q` | Поиск по `name` / `description` (ILIKE) |
+| `brand` | Точное совпадение (`apple` / `samsung` / …) |
+| `category_id` | UUID категории |
+| `min_price_cents` / `max_price_cents` | Диапазон цены (учитываются если > 0); `min > max` → **400** |
+| `in_stock` | `true` — только `stockQuantity > 0` |
+| `sort` | `price_asc` \| `price_desc` \| `name_asc` \| `name_desc` |
+| `page_size` | default **20**, max **50**; `<0` или `>50` → **400** |
+| `page_token` | opaque token следующей страницы; битый → **400** |
+
+**Ответ `200`:** `products`, `nextPageToken`, `totalCount`. У товара есть `categoryId`.
+
+Неизвестная категория → пустой список (не 404).
 
 ```bash
-curl http://localhost:8080/v1/products
+curl "http://localhost:8080/v1/products?q=iphone&brand=apple&page_size=10&sort=price_asc"
 ```
-
----
 
 ### 1.2. Получить товар по ID
 
@@ -191,9 +188,49 @@ GET /v1/products/{product_id}
 
 **Ошибки:** товар не найден → **404**; пустой id → **400**.
 
-```bash
-curl http://localhost:8080/v1/products/550e8400-e29b-41d4-a716-446655440001
+### 1.3. Категории
+
+```http
+GET /v1/categories
+GET /v1/categories/{category_id}
 ```
+
+Сиды: `phones`, `tablets`, `laptops`, `wearables`, `gpu`, `storage` (UUID `770e8400-e29b-41d4-a716-446655440001`…`0006`).
+
+---
+
+## 1a. Доставка
+
+### Адреса (JWT)
+
+```http
+GET    /v1/users/{user_id}/addresses
+POST   /v1/users/{user_id}/addresses
+GET    /v1/users/{user_id}/addresses/{address_id}
+PATCH  /v1/users/{user_id}/addresses/{address_id}
+DELETE /v1/users/{user_id}/addresses/{address_id}
+```
+
+Обязательные поля create/update: `city`, `street`, `building`, `recipientName`, `phone`.  
+Чужой `user_id` → **403**. Адрес не найден → **404**. Первый адрес пользователя становится `isDefault`.
+
+### Пункты выдачи (публично)
+
+```http
+GET /v1/pickup-points
+GET /v1/pickup-points/{pickup_point_id}
+```
+
+`List` возвращает только `active=true`. Сиды: `MSK-001`…`SPB-002` + неактивный `MSK-X01` (`660e8400-…0006`) для негативных тестов.
+
+### Тарифы
+
+| Метод | Поле в CreateOrder | Стоимость |
+|-------|--------------------|-----------|
+| `DELIVERY_METHOD_COURIER` | `addressId` | **29900**; **0** если сабтотал корзины ≥ **500000** |
+| `DELIVERY_METHOD_PICKUP` | `pickupPointId` | **0** |
+
+На заказ пишется snapshot (`deliveryInfo`) + `deliveryFeeCents`. Промокод на доставку не действует.
 
 ---
 
@@ -294,14 +331,18 @@ DELETE /v1/users/{user_id}/cart/promocode
 | JSON | Число | Как появляется |
 |------|-------|----------------|
 | `ORDER_STATUS_CREATED` | 1 | После `POST /v1/orders` |
-| `ORDER_STATUS_PAID` | 2 | Ручной `UpdateOrderStatus` из `CREATED` |
-| `ORDER_STATUS_SHIPPED` | 3 | Авто через **10 мин** после `PAID` (на `GET` заказа) |
+| `ORDER_STATUS_PAID` | 2 | Ручной `UpdateOrderStatus` из `CREATED` → ставит job |
+| `ORDER_STATUS_SHIPPED` | 3 | Worker через `ORDER_STATUS_DELAY` после `PAID` |
 | `ORDER_STATUS_CANCELLED` | 4 | Cancel / status из `CREATED` |
-| `ORDER_STATUS_COMPLETED` | 5 | Авто через **10 мин** после `SHIPPED` |
+| `ORDER_STATUS_COMPLETED` | 5 | Worker через `ORDER_STATUS_DELAY` после `SHIPPED` |
 
 Ручные переходы только: `CREATED` → `PAID`, `CREATED` → `CANCELLED`.  
 `fromStatus` должен совпадать с текущим → иначе **FailedPrecondition**.  
 Чужой заказ → **403**.
+
+`GET` / список заказов **не** меняют статус (breaking vs ≤0.7).
+
+Env: `ORDER_STATUS_DELAY` (default `10m`, в Docker Compose demo — `30s`).
 
 ### 3.1. Создать заказ
 
@@ -310,10 +351,25 @@ POST /v1/orders
 ```
 
 ```json
-{ "user_id": "<uuid>" }
+{
+  "userId": "<uuid>",
+  "deliveryMethod": "DELIVERY_METHOD_COURIER",
+  "addressId": "<address-uuid>"
+}
 ```
 
-После успеха корзина очищается. Ожидание: пустая корзина → ошибка предусловия (не заказ на 0).
+или самовывоз:
+
+```json
+{
+  "userId": "<uuid>",
+  "deliveryMethod": "DELIVERY_METHOD_PICKUP",
+  "pickupPointId": "660e8400-e29b-41d4-a716-446655440001"
+}
+```
+
+После успеха корзина очищается. Пустая корзина → **FailedPrecondition**.  
+Без delivery / неверный id / неактивный ПВЗ → **400** / **404** / **FailedPrecondition**.
 
 ### 3.2. Получить заказ
 
@@ -321,7 +377,7 @@ POST /v1/orders
 GET /v1/orders/{order_id}
 ```
 
-При `GET` сервер может продвинуть `PAID`→`SHIPPED` / `SHIPPED`→`COMPLETED` по таймерам.
+Только чтение (без авто-продвижения статуса).
 
 ### 3.3. Список заказов пользователя
 
@@ -329,7 +385,7 @@ GET /v1/orders/{order_id}
 GET /v1/users/{user_id}/orders
 ```
 
-Владелец или admin. На каждом заказе те же авто-переходы статусов, что и на `GET` одного заказа.
+Владелец или admin.
 
 ### 3.4. Отменить заказ
 
@@ -352,13 +408,25 @@ POST /v1/orders/{order_id}/status
 }
 ```
 
+При `CREATED`→`PAID` создаётся фоновая задача на `SHIPPED`.
+
 ### 3.6. Удалить заказ
 
 ```http
 DELETE /v1/orders/{order_id}
 ```
 
-Жёсткое удаление (строка + `order_items`). Любой статус. Владелец или admin. Отличается от soft-cancel (`POST .../cancel`).
+Hard delete (+ CASCADE jobs).
+
+### 3.7. Jobs заказа (admin)
+
+```http
+GET /v1/admin/orders/{order_id}/jobs
+```
+
+JWT `admin`. Ответ: список jobs (`pending` / `done` / `failed` / `cancelled`) с `runAt`, `fromStatus`, `toStatus`.
+
+---
 
 ---
 
@@ -430,7 +498,7 @@ curl "http://localhost:8080/v1/users/${USER_ID}/cart" \
 # Заказ + оплата
 ORDER_ID=$(curl -s -X POST http://localhost:8080/v1/orders \
   -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
-  -d "{\"user_id\":\"${USER_ID}\"}" | jq -r .order.id)
+  -d "{\"userId\":\"${USER_ID}\",\"deliveryMethod\":\"DELIVERY_METHOD_PICKUP\",\"pickupPointId\":\"660e8400-e29b-41d4-a716-446655440001\"}" | jq -r .order.id)
 
 curl -X POST "http://localhost:8080/v1/orders/${ORDER_ID}/status" \
   -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
@@ -450,9 +518,10 @@ Reflection включён. Контракты: `proto/*.proto`.
 | Сервис | Пакет | Описание |
 |--------|-------|----------|
 | `UserService` | `store.user.v1` | Пользователи |
-| `CatalogService` | `store.catalog.v1` | Каталог |
+| `CatalogService` | `store.catalog.v1` | Каталог + категории |
+| `DeliveryService` | `store.delivery.v1` | Адреса + ПВЗ |
 | `CartService` | `store.cart.v1` | Корзина |
-| `OrderService` | `store.order.v1` | Заказы |
+| `OrderService` | `store.order.v1` | Заказы + admin jobs |
 | `PromoService` | `store.promo.v1` | Admin-промокоды |
 
 Для Cart / Order / Promo передавайте metadata: `authorization: Bearer <token>`.
@@ -517,6 +586,15 @@ Reflection включён. Контракты: `proto/*.proto`.
 | `DELETE /v1/users/{user_id}` | `UserService.DeleteUser` |
 | `GET /v1/products` | `CatalogService.ListProducts` |
 | `GET /v1/products/{product_id}` | `CatalogService.GetProduct` |
+| `GET /v1/categories` | `CatalogService.ListCategories` |
+| `GET /v1/categories/{category_id}` | `CatalogService.GetCategory` |
+| `GET /v1/users/{user_id}/addresses` | `DeliveryService.ListAddresses` |
+| `POST /v1/users/{user_id}/addresses` | `DeliveryService.CreateAddress` |
+| `GET /v1/users/{user_id}/addresses/{address_id}` | `DeliveryService.GetAddress` |
+| `PATCH /v1/users/{user_id}/addresses/{address_id}` | `DeliveryService.UpdateAddress` |
+| `DELETE /v1/users/{user_id}/addresses/{address_id}` | `DeliveryService.DeleteAddress` |
+| `GET /v1/pickup-points` | `DeliveryService.ListPickupPoints` |
+| `GET /v1/pickup-points/{id}` | `DeliveryService.GetPickupPoint` |
 | `GET /v1/users/{user_id}/cart` | `CartService.GetCart` |
 | `POST /v1/users/{user_id}/cart/items` | `CartService.AddItem` |
 | `DELETE /v1/users/{user_id}/cart/items/{product_id}` | `CartService.RemoveItem` |
@@ -529,6 +607,7 @@ Reflection включён. Контракты: `proto/*.proto`.
 | `POST /v1/orders/{order_id}/cancel` | `OrderService.CancelOrder` |
 | `POST /v1/orders/{order_id}/status` | `OrderService.UpdateOrderStatus` |
 | `DELETE /v1/orders/{order_id}` | `OrderService.DeleteOrder` |
+| `GET /v1/admin/orders/{order_id}/jobs` | `OrderService.ListOrderJobs` |
 | `GET /v1/admin/promocodes` | `PromoService.ListPromocodes` |
 | `POST /v1/admin/promocodes` | `PromoService.CreatePromocode` |
 | `PATCH /v1/admin/promocodes/{code}` | `PromoService.UpdatePromocode` |

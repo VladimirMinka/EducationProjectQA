@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,11 +36,21 @@ func (r *OrderRepository) CreateOrder(order repository.Order) (repository.Order,
 	order.CreatedAt = now
 	order.UpdatedAt = now
 
+	snap, err := json.Marshal(order.DeliverySnapshot)
+	if err != nil {
+		return repository.Order{}, fmt.Errorf("marshal delivery snapshot: %w", err)
+	}
+
 	const insertOrder = `
-		INSERT INTO orders (id, user_id, total_amount_cents, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO orders (
+			id, user_id, total_amount_cents, status, created_at, updated_at,
+			delivery_method, delivery_fee_cents, delivery_snapshot
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
-	if _, err := tx.ExecContext(ctx, insertOrder, order.ID, order.UserID, order.TotalAmountCents, order.Status, order.CreatedAt, order.UpdatedAt); err != nil {
+	if _, err := tx.ExecContext(ctx, insertOrder,
+		order.ID, order.UserID, order.TotalAmountCents, order.Status, order.CreatedAt, order.UpdatedAt,
+		order.DeliveryMethod, order.DeliveryFeeCents, snap,
+	); err != nil {
 		return repository.Order{}, fmt.Errorf("insert order: %w", err)
 	}
 
@@ -63,12 +74,14 @@ func (r *OrderRepository) GetOrder(orderID string) (repository.Order, error) {
 	ctx := context.Background()
 
 	const orderQ = `
-		SELECT id, user_id, total_amount_cents, status, created_at, updated_at
+		SELECT id, user_id, total_amount_cents, status, created_at, updated_at,
+		       delivery_method, delivery_fee_cents, delivery_snapshot
 		FROM orders
 		WHERE id = $1
 	`
 
 	var order repository.Order
+	var snap []byte
 	err := r.db.QueryRowContext(ctx, orderQ, orderID).Scan(
 		&order.ID,
 		&order.UserID,
@@ -76,12 +89,18 @@ func (r *OrderRepository) GetOrder(orderID string) (repository.Order, error) {
 		&order.Status,
 		&order.CreatedAt,
 		&order.UpdatedAt,
+		&order.DeliveryMethod,
+		&order.DeliveryFeeCents,
+		&snap,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return repository.Order{}, repository.ErrOrderNotFound
 	}
 	if err != nil {
 		return repository.Order{}, fmt.Errorf("get order: %w", err)
+	}
+	if err := json.Unmarshal(snap, &order.DeliverySnapshot); err != nil {
+		return repository.Order{}, fmt.Errorf("unmarshal delivery snapshot: %w", err)
 	}
 
 	items, err := r.loadItems(ctx, orderID)
@@ -122,7 +141,8 @@ func (r *OrderRepository) loadItems(ctx context.Context, orderID string) ([]repo
 func (r *OrderRepository) ListOrders(userID string) ([]repository.Order, error) {
 	ctx := context.Background()
 	const q = `
-		SELECT id, user_id, total_amount_cents, status, created_at, updated_at
+		SELECT id, user_id, total_amount_cents, status, created_at, updated_at,
+		       delivery_method, delivery_fee_cents, delivery_snapshot
 		FROM orders
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -136,6 +156,7 @@ func (r *OrderRepository) ListOrders(userID string) ([]repository.Order, error) 
 	orders := make([]repository.Order, 0)
 	for rows.Next() {
 		var order repository.Order
+		var snap []byte
 		if err := rows.Scan(
 			&order.ID,
 			&order.UserID,
@@ -143,8 +164,14 @@ func (r *OrderRepository) ListOrders(userID string) ([]repository.Order, error) 
 			&order.Status,
 			&order.CreatedAt,
 			&order.UpdatedAt,
+			&order.DeliveryMethod,
+			&order.DeliveryFeeCents,
+			&snap,
 		); err != nil {
 			return nil, fmt.Errorf("scan order: %w", err)
+		}
+		if err := json.Unmarshal(snap, &order.DeliverySnapshot); err != nil {
+			return nil, fmt.Errorf("unmarshal delivery snapshot: %w", err)
 		}
 		orders = append(orders, order)
 	}
@@ -152,7 +179,6 @@ func (r *OrderRepository) ListOrders(userID string) ([]repository.Order, error) 
 		return nil, fmt.Errorf("list orders rows: %w", err)
 	}
 
-	// Один SELECT вместо N+1: страница заказов иначе делает запрос на каждый заказ.
 	if err := r.loadItemsForOrders(ctx, orders); err != nil {
 		return nil, err
 	}
@@ -211,9 +237,11 @@ func (r *OrderRepository) UpdateOrderStatus(orderID string, fromStatus, toStatus
 		UPDATE orders
 		SET status = $3, updated_at = NOW()
 		WHERE id = $1 AND status = $2
-		RETURNING id, user_id, total_amount_cents, status, created_at, updated_at
+		RETURNING id, user_id, total_amount_cents, status, created_at, updated_at,
+		          delivery_method, delivery_fee_cents, delivery_snapshot
 	`
 	var order repository.Order
+	var snap []byte
 	err := r.db.QueryRowContext(ctx, q, orderID, fromStatus, toStatus).Scan(
 		&order.ID,
 		&order.UserID,
@@ -221,12 +249,18 @@ func (r *OrderRepository) UpdateOrderStatus(orderID string, fromStatus, toStatus
 		&order.Status,
 		&order.CreatedAt,
 		&order.UpdatedAt,
+		&order.DeliveryMethod,
+		&order.DeliveryFeeCents,
+		&snap,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return repository.Order{}, fmt.Errorf("status transition rejected")
 	}
 	if err != nil {
 		return repository.Order{}, fmt.Errorf("update order status: %w", err)
+	}
+	if err := json.Unmarshal(snap, &order.DeliverySnapshot); err != nil {
+		return repository.Order{}, fmt.Errorf("unmarshal delivery snapshot: %w", err)
 	}
 	items, err := r.loadItems(ctx, orderID)
 	if err != nil {

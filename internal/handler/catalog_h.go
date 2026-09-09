@@ -7,14 +7,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	// Импортируем сгенерированный код контрактов
 	pb "awesomeProject/gen/store/api/catalog/v1"
-
 	"awesomeProject/internal/repository"
 	"awesomeProject/internal/service"
 )
 
-// CatalogHandler реализует сгенерированный интерфейс CatalogServiceServer
 type CatalogHandler struct {
 	pb.UnimplementedCatalogServiceServer
 	svc *service.CatalogService
@@ -24,10 +21,21 @@ func NewCatalogHandler(svc *service.CatalogService) *CatalogHandler {
 	return &CatalogHandler{svc: svc}
 }
 
+func mapProduct(p repository.Product) *pb.Product {
+	return &pb.Product{
+		Id:            p.ID,
+		Name:          p.Name,
+		Description:   p.Description,
+		PriceCents:    p.PriceCents,
+		StockQuantity: p.StockQuantity,
+		Brand:         p.Brand,
+		CategoryId:    p.CategoryID,
+	}
+}
+
 func (h *CatalogHandler) GetProduct(ctx context.Context, req *pb.GetProductRequest) (*pb.ProductResponse, error) {
 	product, err := h.svc.GetProduct(req.GetProductId())
 	if err != nil {
-		// Маппинг ошибок в правильные gRPC статусы
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Товар с ID '%s' не найден", req.GetProductId())
 		}
@@ -36,40 +44,81 @@ func (h *CatalogHandler) GetProduct(ctx context.Context, req *pb.GetProductReque
 		}
 		return nil, status.Errorf(codes.Internal, "Внутренняя ошибка сервера: %v", err)
 	}
-
-	// Конвертируем внутреннюю модель в Protobuf-сообщение
-	return &pb.ProductResponse{
-		Product: &pb.Product{
-			Id:            product.ID,
-			Name:          product.Name,
-			Description:   product.Description,
-			PriceCents:    product.PriceCents,
-			StockQuantity: product.StockQuantity,
-			Brand:         product.Brand,
-		},
-	}, nil
+	return &pb.ProductResponse{Product: mapProduct(product)}, nil
 }
 
 func (h *CatalogHandler) ListProducts(ctx context.Context, req *pb.ListProductsRequest) (*pb.ListProductsResponse, error) {
-	products, err := h.svc.ListProducts()
+	params := service.ListProductsParams{
+		PageSize:  req.GetPageSize(),
+		PageToken: req.GetPageToken(),
+		Query:     req.GetQ(),
+		Brand:     req.GetBrand(),
+		CategoryID: req.GetCategoryId(),
+		Sort:      req.GetSort(),
+	}
+	if req.GetMinPriceCents() > 0 {
+		params.HasMinPrice = true
+		params.MinPriceCents = req.GetMinPriceCents()
+	}
+	if req.GetMaxPriceCents() > 0 {
+		params.HasMaxPrice = true
+		params.MaxPriceCents = req.GetMaxPriceCents()
+	}
+	if req.InStock != nil {
+		v := req.GetInStock()
+		params.InStock = &v
+	}
+
+	result, err := h.svc.ListProducts(params)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Не удалось получить список товаров")
+		if errors.Is(err, service.ErrInvalidPageSize) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		if errors.Is(err, service.ErrInvalidPageToken) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		if errors.Is(err, service.ErrInvalidPriceRange) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		if errors.Is(err, service.ErrInvalidSort) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		return nil, status.Errorf(codes.Internal, "Не удалось получить список товаров: %v", err)
 	}
 
-	var pbProducts []*pb.Product
-	for _, p := range products {
-		pbProducts = append(pbProducts, &pb.Product{
-			Id:            p.ID,
-			Name:          p.Name,
-			Description:   p.Description,
-			PriceCents:    p.PriceCents,
-			StockQuantity: p.StockQuantity,
-			Brand:         p.Brand,
-		})
+	pbProducts := make([]*pb.Product, 0, len(result.Products))
+	for _, p := range result.Products {
+		pbProducts = append(pbProducts, mapProduct(p))
 	}
-
 	return &pb.ListProductsResponse{
-		Products: pbProducts,
-		// next_page_token пока оставляем пустым, так как пагинацию добавим позже
+		Products:      pbProducts,
+		NextPageToken: result.NextPageToken,
+		TotalCount:    result.TotalCount,
 	}, nil
+}
+
+func (h *CatalogHandler) ListCategories(ctx context.Context, req *pb.ListCategoriesRequest) (*pb.ListCategoriesResponse, error) {
+	cats, err := h.svc.ListCategories()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Не удалось получить категории: %v", err)
+	}
+	out := make([]*pb.Category, 0, len(cats))
+	for _, c := range cats {
+		out = append(out, &pb.Category{Id: c.ID, Slug: c.Slug, Name: c.Name})
+	}
+	return &pb.ListCategoriesResponse{Categories: out}, nil
+}
+
+func (h *CatalogHandler) GetCategory(ctx context.Context, req *pb.GetCategoryRequest) (*pb.CategoryResponse, error) {
+	c, err := h.svc.GetCategory(req.GetCategoryId())
+	if err != nil {
+		if errors.Is(err, repository.ErrCategoryNotFound) {
+			return nil, status.Error(codes.NotFound, "категория не найдена")
+		}
+		if err.Error() == "category_id cannot be empty" {
+			return nil, status.Error(codes.InvalidArgument, "category_id обязателен")
+		}
+		return nil, status.Errorf(codes.Internal, "ошибка категории: %v", err)
+	}
+	return &pb.CategoryResponse{Category: &pb.Category{Id: c.ID, Slug: c.Slug, Name: c.Name}}, nil
 }

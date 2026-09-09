@@ -39,6 +39,21 @@ func mapOrderToProto(order repository.Order) *pb.Order {
 		created = order.CreatedAt.UTC().Format(time.RFC3339)
 	}
 
+	snap := order.DeliverySnapshot
+	info := &pb.DeliveryInfo{
+		RecipientName: snap.RecipientName,
+		Phone:         snap.Phone,
+		City:          snap.City,
+		Street:        snap.Street,
+		Building:      snap.Building,
+		Apartment:     snap.Apartment,
+		PostalCode:    snap.PostalCode,
+		AddressLine:   snap.AddressLine,
+		PickupCode:    snap.PickupCode,
+		PickupAddress: snap.PickupAddress,
+		WorkHours:     snap.WorkHours,
+	}
+
 	return &pb.Order{
 		Id:               order.ID,
 		UserId:           order.UserID,
@@ -46,6 +61,9 @@ func mapOrderToProto(order repository.Order) *pb.Order {
 		TotalAmountCents: order.TotalAmountCents,
 		Status:           pb.OrderStatus(order.Status),
 		CreatedAt:        created,
+		DeliveryMethod:   pb.DeliveryMethod(order.DeliveryMethod),
+		DeliveryFeeCents: order.DeliveryFeeCents,
+		DeliveryInfo:     info,
 	}
 }
 
@@ -61,13 +79,21 @@ func (h *OrderHandler) CreateOrder(ctx context.Context, req *pb.CreateOrderReque
 		return nil, err
 	}
 
-	order, err := h.svc.CreateOrder(req.GetUserId())
+	order, err := h.svc.CreateOrder(service.CreateOrderInput{
+		UserID:        req.GetUserId(),
+		Method:        int32(req.GetDeliveryMethod()),
+		AddressID:     req.GetAddressId(),
+		PickupPointID: req.GetPickupPointId(),
+	})
 	if err != nil {
 		if mapped := mapUserNotFound(err); mapped != nil {
 			return nil, mapped
 		}
 		if strings.Contains(err.Error(), "корзина пуста") {
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		if mapped := mapDeliveryErr(err); status.Code(mapped) != codes.Internal {
+			return nil, mapped
 		}
 		return nil, status.Errorf(codes.Internal, "ошибка создания заказа: %v", err)
 	}
@@ -155,6 +181,59 @@ func (h *OrderHandler) UpdateOrderStatus(ctx context.Context, req *pb.UpdateOrde
 		return nil, mapOrderErr(err)
 	}
 	return &pb.OrderResponse{Order: mapOrderToProto(order)}, nil
+}
+
+func (h *OrderHandler) ListOrderJobs(ctx context.Context, req *pb.ListOrderJobsRequest) (*pb.ListOrderJobsResponse, error) {
+	if req.GetOrderId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "order_id обязателен")
+	}
+	jobs, err := h.svc.ListOrderJobs(req.GetOrderId())
+	if err != nil {
+		return nil, mapOrderErr(err)
+	}
+	out := make([]*pb.OrderJob, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, mapOrderJob(j))
+	}
+	return &pb.ListOrderJobsResponse{Jobs: out}, nil
+}
+
+func mapOrderJob(j repository.OrderJob) *pb.OrderJob {
+	runAt := ""
+	if !j.RunAt.IsZero() {
+		runAt = j.RunAt.UTC().Format(time.RFC3339)
+	}
+	created := ""
+	if !j.CreatedAt.IsZero() {
+		created = j.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	processed := ""
+	if j.ProcessedAt != nil {
+		processed = j.ProcessedAt.UTC().Format(time.RFC3339)
+	}
+	statusVal := pb.OrderJobStatus_ORDER_JOB_STATUS_UNSPECIFIED
+	switch j.Status {
+	case repository.OrderJobPending:
+		statusVal = pb.OrderJobStatus_ORDER_JOB_STATUS_PENDING
+	case repository.OrderJobDone:
+		statusVal = pb.OrderJobStatus_ORDER_JOB_STATUS_DONE
+	case repository.OrderJobFailed:
+		statusVal = pb.OrderJobStatus_ORDER_JOB_STATUS_FAILED
+	case repository.OrderJobCancelled:
+		statusVal = pb.OrderJobStatus_ORDER_JOB_STATUS_CANCELLED
+	}
+	return &pb.OrderJob{
+		Id:          j.ID,
+		OrderId:     j.OrderID,
+		FromStatus:  pb.OrderStatus(j.FromStatus),
+		ToStatus:    pb.OrderStatus(j.ToStatus),
+		RunAt:       runAt,
+		Status:      statusVal,
+		Attempts:    j.Attempts,
+		LastError:   j.LastError,
+		CreatedAt:   created,
+		ProcessedAt: processed,
+	}
 }
 
 func mapOrderErr(err error) error {

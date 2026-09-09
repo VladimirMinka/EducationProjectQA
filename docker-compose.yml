@@ -34,10 +34,71 @@ services:
       JWT_SECRET: dev-secret-change-me
       # IPv4 loopback: `:50051` внутри Alpine иногда сначала идёт в IPv6 и подвисает.
       GRPC_ENDPOINT: 127.0.0.1:50051
+      ORDER_STATUS_DELAY: 30s
+      ORDER_JOB_POLL_INTERVAL: 2s
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
+  # ELK: docker compose --profile elk up --build
+  elasticsearch:
+    profiles: ["elk"]
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.http.ssl.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  kibana:
+    profiles: ["elk"]
+    image: docker.elastic.co/kibana/kibana:8.15.3
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      XPACK_SECURITY_ENABLED: "false"
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -q '\"level\":\"available\"' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
+
+  filebeat:
+    profiles: ["elk"]
+    image: docker.elastic.co/beats/filebeat:8.15.3
+    user: root
+    command: ["filebeat", "-e", "-strict.perms=false"]
+    volumes:
+      - ./elk/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+      store:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  elasticsearch_data:

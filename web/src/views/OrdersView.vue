@@ -7,7 +7,7 @@ import { api, formatMoney } from "../lib/api";
 import { productIdSuffix } from "../lib/images";
 import { useSession } from "../composables/useSession";
 import { useToast } from "../composables/useToast";
-import { formatOrderDate, orderStatusKey, orderStatusLabel } from "../lib/orders";
+import { formatOrderDate, orderStatusKey, orderStatusLabel, deliveryMethodLabel, formatDeliveryInfo } from "../lib/orders";
 
 const route = useRoute();
 const router = useRouter();
@@ -138,6 +138,15 @@ onMounted(async () => {
               </div>
             </div>
           </div>
+          <p class="cart-meta" data-testid="order-delivery">
+            <span data-testid="order-delivery-method">{{ deliveryMethodLabel(order.deliveryMethod) }}</span>
+            ·
+            <span data-testid="order-delivery-info">{{ formatDeliveryInfo(order) }}</span>
+            · доставка
+            <span data-testid="order-delivery-fee" :data-cents="Number(order.deliveryFeeCents ?? 0)">
+              {{ formatMoney(order.deliveryFeeCents) }}
+            </span>
+          </p>
           <div class="order-foot">
             <span class="price" data-testid="order-total" :data-cents="Number(order.totalAmountCents ?? 0)">
               {{ formatMoney(order.totalAmountCents) }}

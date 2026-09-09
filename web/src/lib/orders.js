@@ -30,6 +30,21 @@ export function orderStatusLabel(status) {
   return STATUS_LABELS[key] || key;
 }
 
+export function deliveryMethodLabel(method) {
+  const raw = String(method || "").toUpperCase();
+  if (raw.includes("COURIER") || raw === "1") return "Курьер";
+  if (raw.includes("PICKUP") || raw === "2") return "Самовывоз";
+  return "—";
+}
+
+export function formatDeliveryInfo(order) {
+  const info = order?.deliveryInfo || {};
+  if (info.pickupCode) {
+    return `${info.pickupCode}: ${info.pickupAddress || info.addressLine || ""}`;
+  }
+  return info.addressLine || [info.city, info.street, info.building].filter(Boolean).join(", ");
+}
+
 export function formatOrderDate(value) {
   if (!value) return "";
   const d = new Date(value);

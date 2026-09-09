@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package store.delivery.v1;
+
+option go_package = "store/api/delivery/v1;delivery";
+
+import "google/api/annotations.proto";
+
+service DeliveryService {
+  rpc ListAddresses (ListAddressesRequest) returns (ListAddressesResponse) {
+    option (google.api.http) = {
+      get: "/v1/users/{user_id}/addresses"
+    };
+  }
+
+  rpc CreateAddress (CreateAddressRequest) returns (AddressResponse) {
+    option (google.api.http) = {
+      post: "/v1/users/{user_id}/addresses"
+      body: "*"
+    };
+  }
+
+  rpc GetAddress (GetAddressRequest) returns (AddressResponse) {
+    option (google.api.http) = {
+      get: "/v1/users/{user_id}/addresses/{address_id}"
+    };
+  }
+
+  rpc UpdateAddress (UpdateAddressRequest) returns (AddressResponse) {
+    option (google.api.http) = {
+      patch: "/v1/users/{user_id}/addresses/{address_id}"
+      body: "*"
+    };
+  }
+
+  rpc DeleteAddress (DeleteAddressRequest) returns (DeleteAddressResponse) {
+    option (google.api.http) = {
+      delete: "/v1/users/{user_id}/addresses/{address_id}"
+    };
+  }
+
+  rpc ListPickupPoints (ListPickupPointsRequest) returns (ListPickupPointsResponse) {
+    option (google.api.http) = {
+      get: "/v1/pickup-points"
+    };
+  }
+
+  rpc GetPickupPoint (GetPickupPointRequest) returns (PickupPointResponse) {
+    option (google.api.http) = {
+      get: "/v1/pickup-points/{pickup_point_id}"
+    };
+  }
+}
+
+message Address {
+  string id = 1;
+  string user_id = 2;
+  string title = 3;
+  string city = 4;
+  string street = 5;
+  string building = 6;
+  string apartment = 7;
+  string postal_code = 8;
+  string recipient_name = 9;
+  string phone = 10;
+  bool is_default = 11;
+  string created_at = 12;
+}
+
+message PickupPoint {
+  string id = 1;
+  string code = 2;
+  string city = 3;
+  string address = 4;
+  string work_hours = 5;
+  bool active = 6;
+}
+
+message ListAddressesRequest {
+  string user_id = 1;
+}
+
+message ListAddressesResponse {
+  repeated Address addresses = 1;
+}
+
+message CreateAddressRequest {
+  string user_id = 1;
+  string title = 2;
+  string city = 3;
+  string street = 4;
+  string building = 5;
+  string apartment = 6;
+  string postal_code = 7;
+  string recipient_name = 8;
+  string phone = 9;
+  bool is_default = 10;
+}
+
+message GetAddressRequest {
+  string user_id = 1;
+  string address_id = 2;
+}
+
+message UpdateAddressRequest {
+  string user_id = 1;
+  string address_id = 2;
+  string title = 3;
+  string city = 4;
+  string street = 5;
+  string building = 6;
+  string apartment = 7;
+  string postal_code = 8;
+  string recipient_name = 9;
+  string phone = 10;
+  bool is_default = 11;
+}
+
+message DeleteAddressRequest {
+  string user_id = 1;
+  string address_id = 2;
+}
+
+message DeleteAddressResponse {}
+
+message AddressResponse {
+  Address address = 1;
+}
+
+message ListPickupPointsRequest {}
+
+message ListPickupPointsResponse {
+  repeated PickupPoint pickup_points = 1;
+}
+
+message GetPickupPointRequest {
+  string pickup_point_id = 1;
+}
+
+message PickupPointResponse {
+  PickupPoint pickup_point = 1;
+}

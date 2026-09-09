@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -19,14 +18,17 @@ import (
 
 	pbCart "awesomeProject/gen/store/api/cart/v1"
 	pbCatalog "awesomeProject/gen/store/api/catalog/v1"
+	pbDelivery "awesomeProject/gen/store/api/delivery/v1"
 	pbOrder "awesomeProject/gen/store/api/order/v1"
 	pbPromo "awesomeProject/gen/store/api/promo/v1"
 	pbUser "awesomeProject/gen/store/api/user/v1"
 
 	"awesomeProject/internal/auth"
 	"awesomeProject/internal/handler"
+	"awesomeProject/internal/logging"
 	"awesomeProject/internal/repository/postgres"
 	"awesomeProject/internal/service"
+	"awesomeProject/internal/worker"
 )
 
 func main() {
@@ -43,7 +45,8 @@ func main() {
 
 	db, err := postgres.Open(dsn)
 	if err != nil {
-		log.Fatalf("database: %v", err)
+		logging.Logger.Error("database", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
@@ -63,19 +66,32 @@ func main() {
 	cartService := service.NewCartService(cartRepo, catalogService, userService, promoService)
 	cartHandler := handler.NewCartHandler(cartService)
 
+	deliveryRepo := postgres.NewDeliveryRepository(db)
+	deliveryService := service.NewDeliveryService(deliveryRepo, userService)
+	deliveryHandler := handler.NewDeliveryHandler(deliveryService)
+
 	orderRepo := postgres.NewOrderRepository(db)
-	orderService := service.NewOrderService(orderRepo, cartService, catalogService, userService)
+	orderJobRepo := postgres.NewOrderJobRepository(db)
+	orderService := service.NewOrderService(orderRepo, orderJobRepo, cartService, catalogService, userService, deliveryService)
 	orderHandler := handler.NewOrderHandler(orderService)
+
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+	go worker.NewOrderStatusWorker(orderRepo, orderJobRepo, orderService.StatusDelay()).Run(workerCtx)
 
 	// Listen on all interfaces; dial via explicit IPv4 loopback (see GRPC_ENDPOINT).
 	grpcListen := ":50051"
 	lis, err := net.Listen("tcp", grpcListen)
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		logging.Logger.Error("failed to listen", "error", err)
+		os.Exit(1)
 	}
 
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(auth.UnaryInterceptor(jwtManager)),
+		grpc.ChainUnaryInterceptor(
+			auth.UnaryLoggingInterceptor(),
+			auth.UnaryInterceptor(jwtManager),
+		),
 	)
 
 	pbUser.RegisterUserServiceServer(grpcServer, userHandler)
@@ -83,13 +99,15 @@ func main() {
 	pbCart.RegisterCartServiceServer(grpcServer, cartHandler)
 	pbOrder.RegisterOrderServiceServer(grpcServer, orderHandler)
 	pbPromo.RegisterPromoServiceServer(grpcServer, promoHandler)
+	pbDelivery.RegisterDeliveryServiceServer(grpcServer, deliveryHandler)
 
 	reflection.Register(grpcServer)
 
 	go func() {
-		fmt.Printf("Starting gRPC Simulator on %s...\n", grpcListen)
+		logging.Logger.Info("starting gRPC", "addr", grpcListen)
 		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("failed to serve gRPC: %v", err)
+			logging.Logger.Error("failed to serve gRPC", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -101,7 +119,8 @@ func main() {
 
 	httpPort := ":8080"
 	if err := runHTTPGateway(context.Background(), grpcDial, httpPort); err != nil {
-		log.Fatalf("failed to serve HTTP gateway: %v", err)
+		logging.Logger.Error("failed to serve HTTP gateway", "error", err)
+		os.Exit(1)
 	}
 }
 
@@ -135,13 +154,16 @@ func runHTTPGateway(ctx context.Context, grpcEndpoint, httpPort string) error {
 	if err := pbPromo.RegisterPromoServiceHandler(ctx, mux, conn); err != nil {
 		return fmt.Errorf("register promo gateway: %w", err)
 	}
+	if err := pbDelivery.RegisterDeliveryServiceHandler(ctx, mux, conn); err != nil {
+		return fmt.Errorf("register delivery gateway: %w", err)
+	}
 
 	warmCtx, warmCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer warmCancel()
 	if err := warmGateway(warmCtx, conn); err != nil {
-		log.Printf("warmup warning: %v", err)
+		logging.Logger.Warn("warmup warning", "error", err)
 	} else {
-		log.Printf("warmup ok (grpc dial %s)", grpcEndpoint)
+		logging.Logger.Info("warmup ok", "grpc", grpcEndpoint)
 	}
 
 	webDir := os.Getenv("WEB_DIR")
@@ -149,8 +171,35 @@ func runHTTPGateway(ctx context.Context, grpcEndpoint, httpPort string) error {
 		webDir = "web/dist"
 	}
 
-	fmt.Printf("Starting HTTP gateway + UI on %s (web=%s, grpc=%s)...\n", httpPort, webDir, grpcEndpoint)
-	return http.ListenAndServe(httpPort, withCORS(withGzip(withStaticCache(withUI(mux, webDir)))))
+	logging.Logger.Info("starting HTTP gateway + UI", "addr", httpPort, "web", webDir, "grpc", grpcEndpoint)
+	// outermost: logs CORS OPTIONS and all API/UI traffic
+	return http.ListenAndServe(httpPort, withAccessLog(withCORS(withGzip(withStaticCache(withUI(mux, webDir))))))
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusRecorder) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// withAccessLog writes a short JSON access line. Full request/response bodies,
+// user_id and role are logged on the gRPC interceptor (gateway → gRPC).
+func withAccessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		logging.Logger.Info("http",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
+	})
 }
 
 // warmGateway устанавливает gRPC-канал и прогревает каталог/БД до первого пользовательского запроса.

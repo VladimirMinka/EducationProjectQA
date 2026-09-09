@@ -11,10 +11,12 @@ gRPC store backend with a JSON HTTP gateway. Catalog, cart, order, user, and adm
 ## Features
 
 - **Users** — register, login (JWT + role), get user by ID
-- **Catalog** — list and fetch products with `brand` (public)
+- **Catalog** — list/search/filter/sort products, categories (public)
+- **Delivery** — user addresses CRUD, pickup points; required on checkout
 - **Cart** — add/remove items, get/clear cart, apply/clear promocode, 30m TTL (**JWT required**)
-- **Orders** — create from cart, get, cancel, update status, **hard delete** (any status); auto `PAID`→`SHIPPED`→`COMPLETED` (**JWT required**)
+- **Orders** — create from cart with delivery, get, cancel, update status, **hard delete**; auto `PAID`→`SHIPPED`→`COMPLETED` via **DB job queue** (**JWT required**)
 - **Admin promocodes** — CRUD under `/v1/admin/promocodes` (**admin JWT**)
+- **Admin order jobs** — `GET /v1/admin/orders/{id}/jobs` (**admin JWT**)
 - **Web UI** — Vue 3 SPA (login / catalog / cart / checkout / orders); Docker: `http://localhost:8081/`, local `go run`: `:8080`
 - **Dual transport** — native gRPC (`:50051`) and REST/JSON via grpc-gateway (Docker host `:8081`, process `:8080`)
 - **PostgreSQL** — persistent storage via `pgx` + `database/sql`
@@ -67,6 +69,8 @@ Defaults if unset:
 - `DATABASE_URL` → `postgres://store:store@localhost:5432/store?sslmode=disable`
 - `JWT_SECRET` → `dev-secret-change-me`
 - `WEB_DIR` → `web/dist` (Vite production build output)
+- `ORDER_STATUS_DELAY` → `10m` (Docker Compose demo sets `30s`)
+- `ORDER_JOB_POLL_INTERVAL` → `2s`
 
 UI: open `http://localhost:8081/` with Docker, or `http://localhost:8080/` when running `go run ./cmd/server` locally.
 
@@ -101,9 +105,9 @@ Full UUID prefix: `550e8400-e29b-41d4-a716-44665544` + `0001`…`0050`.
 
 ## Auth
 
-- **Public:** Catalog, `POST /v1/users/register`, `POST /v1/users/login`, `GET /v1/users/{user_id}`
-- **Protected:** Cart, Order, `DELETE /v1/users/{user_id}` — `Authorization: Bearer <access_token>`
-- **Admin:** Promo CRUD — JWT with `role=admin`
+- **Public:** Catalog, pickup points, `POST /v1/users/register`, `POST /v1/users/login`, `GET /v1/users/{user_id}`
+- **Protected:** Cart, Order, Addresses, `DELETE /v1/users/{user_id}` — `Authorization: Bearer <access_token>`
+- **Admin:** Promo CRUD, order jobs — JWT with `role=admin`
 - Access token TTL: **24h** (HS256, `JWT_SECRET`); claims include `role`
 - Path/body `user_id` on cart/order must match JWT `sub` (unless admin where noted)
 - `DELETE /v1/users/{user_id}` removes terminal orders (`COMPLETED` / `CANCELLED`); blocked if any active order remains
@@ -120,17 +124,28 @@ Full UUID prefix: `550e8400-e29b-41d4-a716-44665544` + `0001`…`0050`.
 
 Cart response includes `subtotalCents`, `discountCents`, `totalPriceCents`, `appliedPromocode`, `comboDiscountApplied`, `expiresAt`.
 
+## Delivery
+
+| Method | Required field | Fee |
+|--------|----------------|-----|
+| `COURIER` (`DELIVERY_METHOD_COURIER`) | `address_id` | **29900** cents; **0** if cart subtotal ≥ **500000** |
+| `PICKUP` (`DELIVERY_METHOD_PICKUP`) | `pickup_point_id` | **0** |
+
+Order stores a **delivery snapshot** (JSON) so later address edits do not rewrite history. Order `totalAmountCents` = merchandise (combo rules as before) + `deliveryFeeCents`. Promocode does not discount delivery.
+
+Seed pickup points: `660e8400-e29b-41d4-a716-446655440001`…`0005` (active); `…0006` inactive for negative tests.
+
 ## Order status
 
 | Status | How |
 |--------|-----|
-| `CREATED` | `POST /v1/orders` |
-| `PAID` | `POST /v1/orders/{id}/status` with `fromStatus=CREATED`, `toStatus=PAID` |
+| `CREATED` | `POST /v1/orders` (delivery fields required) |
+| `PAID` | `POST /v1/orders/{id}/status` with `fromStatus=CREATED`, `toStatus=PAID` → enqueues job |
 | `CANCELLED` | `POST /v1/orders/{id}/cancel` or status update `CREATED`→`CANCELLED` |
-| `SHIPPED` | automatic **10 minutes** after becoming `PAID` (evaluated on `GET` order) |
-| `COMPLETED` | automatic **10 minutes** after becoming `SHIPPED` |
+| `SHIPPED` | background worker after `ORDER_STATUS_DELAY` from `PAID` |
+| `COMPLETED` | background worker after another `ORDER_STATUS_DELAY` from `SHIPPED` |
 
-Manual transitions other than `CREATED`→`PAID` / `CREATED`→`CANCELLED` are rejected (`FailedPrecondition`). `fromStatus` must match the current status.
+`GET` / `ListOrders` are **read-only** (no status side effects). Manual transitions other than `CREATED`→`PAID` / `CREATED`→`CANCELLED` are rejected (`FailedPrecondition`). `fromStatus` must match the current status.
 
 ## HTTP API
 
@@ -145,12 +160,30 @@ GET    /v1/users/{user_id}
 DELETE /v1/users/{user_id}
 ```
 
-### Catalog
+### Catalog (public)
 
 ```http
 GET /v1/products
 GET /v1/products/{product_id}
+GET /v1/categories
+GET /v1/categories/{category_id}
 ```
+
+`GET /v1/products` query: `q`, `brand`, `category_id`, `min_price_cents`, `max_price_cents`, `in_stock`, `sort` (`price_asc`\|`price_desc`\|`name_asc`\|`name_desc`), `page_size` (default 20, max 50), `page_token`.
+
+### Delivery
+
+```http
+GET    /v1/users/{user_id}/addresses
+POST   /v1/users/{user_id}/addresses
+GET    /v1/users/{user_id}/addresses/{address_id}
+PATCH  /v1/users/{user_id}/addresses/{address_id}
+DELETE /v1/users/{user_id}/addresses/{address_id}
+GET    /v1/pickup-points
+GET    /v1/pickup-points/{pickup_point_id}
+```
+
+Addresses require JWT (owner or admin). Pickup list/get are public (active points only on list).
 
 ### Cart (JWT)
 
@@ -184,12 +217,27 @@ GET    /v1/orders/{order_id}
 POST   /v1/orders/{order_id}/cancel
 POST   /v1/orders/{order_id}/status
 DELETE /v1/orders/{order_id}
+GET    /v1/admin/orders/{order_id}/jobs
 ```
 
 Create:
 
 ```json
-{ "user_id": "<uuid>" }
+{
+  "user_id": "<uuid>",
+  "deliveryMethod": "DELIVERY_METHOD_COURIER",
+  "addressId": "<address-uuid>"
+}
+```
+
+Pickup:
+
+```json
+{
+  "user_id": "<uuid>",
+  "deliveryMethod": "DELIVERY_METHOD_PICKUP",
+  "pickupPointId": "660e8400-e29b-41d4-a716-446655440001"
+}
 ```
 
 Update status:
@@ -259,7 +307,7 @@ curl -X POST "http://localhost:8080/v1/users/${USER_ID}/cart/promocode" \
 ORDER_ID=$(curl -s -X POST http://localhost:8080/v1/orders \
   -H "Authorization: Bearer ${TOKEN}" \
   -H 'Content-Type: application/json' \
-  -d "{\"user_id\":\"${USER_ID}\"}" | jq -r .order.id)
+  -d "{\"user_id\":\"${USER_ID}\",\"delivery_method\":\"DELIVERY_METHOD_PICKUP\",\"pickup_point_id\":\"660e8400-e29b-41d4-a716-446655440001\"}" | jq -r .order.id)
 
 curl -X POST "http://localhost:8080/v1/orders/${ORDER_ID}/status" \
   -H "Authorization: Bearer ${TOKEN}" \

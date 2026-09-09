@@ -11,6 +11,73 @@ API reference: [`Docs.MD`](Docs.MD) · Project overview: [`README.md`](README.md
 
 ---
 
+## Release 0.10.0 — 2026-08-29
+
+**Theme:** Catalog search, filters, categories, pagination
+
+### Added / Changed
+
+- Categories table + `category_id` on products; `GET /v1/categories`, `GET /v1/categories/{id}`
+- `ListProducts` filters: `q`, `brand`, `category_id`, `min/max_price_cents`, `in_stock`, `sort`, real `page_size` / `page_token` / `total_count`
+- UI catalog uses server-side search/filters + «Показать ещё»
+- One seed SKU with `stock_quantity=0` for `in_stock` tests (`…0015`)
+
+### Migrations
+
+- `007_catalog_search.sql`
+
+### Breaking / QA impact
+
+- Default list is paginated (20); request `page_size=50` or paginate for full catalog
+- Cover filter combos, bad token, empty result, REST=gRPC
+
+---
+
+## Release 0.9.0 — 2026-08-29
+
+**Theme:** Order status job queue
+
+### Added / Changed
+
+- Postgres `order_jobs` + in-process worker (`ORDER_STATUS_DELAY`, `ORDER_JOB_POLL_INTERVAL`)
+- `CREATED→PAID` enqueues `SHIPPED`; worker then enqueues `COMPLETED`
+- `GET` / `ListOrders` no longer auto-progress statuses
+- Admin `GET /v1/admin/orders/{order_id}/jobs`
+
+### Migrations
+
+- `006_order_jobs.sql`
+
+### Breaking / QA impact
+
+- Do not rely on GET side effects for status; poll after delay (Compose demo: `30s`)
+- Cover async transitions, restart with pending job, forbidden manual jumps
+
+---
+
+## Release 0.8.0 — 2026-08-29
+
+**Theme:** Delivery + checkout
+
+### Added / Changed
+
+- User addresses CRUD; pickup points seed (5 active + 1 inactive)
+- `CreateOrder` requires `deliveryMethod` + `addressId` or `pickupPointId`
+- Delivery fee: courier **29900** (free if cart subtotal ≥ **500000**); pickup **0**
+- Order stores delivery snapshot + fee; UI checkout delivery step before card pay
+- Orders UI shows delivery method / address / fee
+
+### Migrations
+
+- `005_delivery.sql`
+
+### Breaking / QA impact
+
+- `POST /v1/orders` without delivery fields → error
+- Cover courier/pickup happy paths, fee threshold, inactive PVZ, address CRUD + snapshot
+
+---
+
 ## Release 0.7.0 — 2026-08-16
 
 **Theme:** Vue 3 frontend

@@ -1,8 +1,8 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import AppShell from "../components/AppShell.vue";
 import ProductImage from "../components/ProductImage.vue";
-import { api, formatMoney } from "../lib/api";
+import { api, formatMoney, invalidateProductsCache } from "../lib/api";
 import { productIdSuffix } from "../lib/images";
 import { useSession } from "../composables/useSession";
 import { useToast } from "../composables/useToast";
@@ -15,55 +15,50 @@ const BRANDS = [
   { id: "amd", label: "AMD" },
 ];
 
+const SORTS = [
+  { id: "", label: "По умолчанию" },
+  { id: "price_asc", label: "Цена ↑" },
+  { id: "price_desc", label: "Цена ↓" },
+  { id: "name_asc", label: "Имя A–Z" },
+  { id: "name_desc", label: "Имя Z–A" },
+];
+
 const { session } = useSession();
 const { showToast } = useToast();
 const shell = ref(null);
 
 const loading = ref(true);
+const loadingMore = ref(false);
 const loadError = ref("");
 const products = ref([]);
+const categories = ref([]);
+const totalCount = ref(0);
+const nextPageToken = ref("");
+
 const brand = ref("all");
+const categoryId = ref("");
+const query = ref("");
+const sort = ref("");
+const inStockOnly = ref(false);
 const priceFloor = ref(0);
-const priceCeil = ref(0);
+const priceCeil = ref(500000);
 const priceMin = ref(0);
-const priceMax = ref(0);
+const priceMax = ref(500000);
 const addingId = ref("");
+
+let fetchTimer = 0;
 
 const priceStep = computed(() =>
   Math.max(100, Math.round((priceCeil.value - priceFloor.value) / 100) || 100)
 );
 
-const filtered = computed(() =>
-  products.value.filter((p) => {
-    const brandOk = brand.value === "all" || p.brand === brand.value;
-    const price = Number(p.priceCents) || 0;
-    return brandOk && price >= priceMin.value && price <= priceMax.value;
-  })
-);
-
-const brandCounts = computed(() => {
-  const map = {};
-  for (const b of BRANDS) {
-    if (b.id === "all") {
-      map.all = products.value.filter((p) => {
-        const price = Number(p.priceCents) || 0;
-        return price >= priceMin.value && price <= priceMax.value;
-      }).length;
-      continue;
-    }
-    map[b.id] = products.value.filter((p) => {
-      const price = Number(p.priceCents) || 0;
-      return p.brand === b.id && price >= priceMin.value && price <= priceMax.value;
-    }).length;
-  }
-  return map;
-});
-
 const summary = computed(() => {
-  const bits = [`${filtered.value.length} товаров`];
+  const bits = [`${products.value.length} из ${totalCount.value}`];
+  if (query.value.trim()) bits.push(`«${query.value.trim()}»`);
   if (brand.value !== "all") bits.push(brand.value);
-  if (priceMin.value > priceFloor.value || priceMax.value < priceCeil.value) {
-    bits.push(`${formatMoney(priceMin.value)}–${formatMoney(priceMax.value)}`);
+  if (categoryId.value) {
+    const cat = categories.value.find((c) => c.id === categoryId.value);
+    if (cat) bits.push(cat.name);
   }
   return bits.join(" · ");
 });
@@ -91,9 +86,56 @@ function syncPrice(which) {
   }
 }
 
-function resetPrice() {
+function resetFilters() {
+  brand.value = "all";
+  categoryId.value = "";
+  query.value = "";
+  sort.value = "";
+  inStockOnly.value = false;
   priceMin.value = priceFloor.value;
   priceMax.value = priceCeil.value;
+}
+
+function buildParams(pageToken = "") {
+  const params = { page_size: 20 };
+  if (pageToken) params.page_token = pageToken;
+  if (query.value.trim()) params.q = query.value.trim();
+  if (brand.value !== "all") params.brand = brand.value;
+  if (categoryId.value) params.category_id = categoryId.value;
+  if (priceMin.value > priceFloor.value) params.min_price_cents = priceMin.value;
+  if (priceMax.value < priceCeil.value) params.max_price_cents = priceMax.value;
+  if (inStockOnly.value) params.in_stock = true;
+  if (sort.value) params.sort = sort.value;
+  return params;
+}
+
+async function fetchProducts({ append = false } = {}) {
+  if (append) loadingMore.value = true;
+  else loading.value = true;
+  try {
+    const token = append ? nextPageToken.value : "";
+    const list = await api.listProducts(buildParams(token));
+    const batch = list.products || [];
+    products.value = append ? products.value.concat(batch) : batch;
+    nextPageToken.value = list.nextPageToken || "";
+    totalCount.value = Number(list.totalCount ?? products.value.length);
+    loadError.value = "";
+  } catch (err) {
+    if (!append) {
+      loadError.value = err.message || "Ошибка загрузки";
+      products.value = [];
+    } else {
+      showToast(err.message || "Не удалось загрузить ещё", true);
+    }
+  } finally {
+    loading.value = false;
+    loadingMore.value = false;
+  }
+}
+
+function scheduleFetch() {
+  window.clearTimeout(fetchTimer);
+  fetchTimer = window.setTimeout(() => fetchProducts({ append: false }), 250);
 }
 
 async function addToCart(productId) {
@@ -112,18 +154,29 @@ async function addToCart(productId) {
   }
 }
 
+watch([brand, categoryId, sort, inStockOnly, priceMin, priceMax], scheduleFetch);
+watch(query, scheduleFetch);
+
 onMounted(async () => {
   try {
-    const list = await api.listProducts();
-    products.value = list.products || [];
-    const cents = products.value.map((p) => Number(p.priceCents) || 0);
-    priceFloor.value = cents.length ? Math.min(...cents) : 0;
-    priceCeil.value = cents.length ? Math.max(...cents) : 0;
-    priceMin.value = priceFloor.value;
-    priceMax.value = priceCeil.value;
+    invalidateProductsCache();
+    const [bounds, cats] = await Promise.all([
+      api.listProducts({ page_size: 50, sort: "price_asc" }),
+      api.listCategories(),
+    ]);
+    categories.value = cats.categories || [];
+    const cents = (bounds.products || []).map((p) => Number(p.priceCents) || 0);
+    // Approximate bounds from first page sorted by price; also fetch price_desc for ceil
+    const high = await api.listProducts({ page_size: 1, sort: "price_desc" });
+    const lowCents = cents.length ? Math.min(...cents) : 0;
+    const highCents = Number(high.products?.[0]?.priceCents) || (cents.length ? Math.max(...cents) : 0);
+    priceFloor.value = lowCents;
+    priceCeil.value = highCents;
+    priceMin.value = lowCents;
+    priceMax.value = highCents;
+    await fetchProducts({ append: false });
   } catch (err) {
     loadError.value = err.message || "Ошибка загрузки";
-  } finally {
     loading.value = false;
   }
 });
@@ -131,15 +184,58 @@ onMounted(async () => {
 
 <template>
   <AppShell ref="shell" active="catalog">
-    <p v-if="loading" class="loading" data-testid="catalog-loading">Загрузка каталога…</p>
-    <div v-else-if="loadError" class="alert alert-error" data-testid="catalog-error">
+    <p v-if="loading && !products.length" class="loading" data-testid="catalog-loading">
+      Загрузка каталога…
+    </p>
+    <div v-else-if="loadError && !products.length" class="alert alert-error" data-testid="catalog-error">
       {{ loadError }}
     </div>
     <div v-else class="catalog-layout" data-testid="catalog-layout" data-page="catalog">
       <aside class="filters-panel" data-testid="catalog-filters">
         <h2 class="filters-title" data-testid="filters-title">Фильтры</h2>
 
-        <p class="filters-hint" data-testid="filter-brand-label">Бренд</p>
+        <label class="filters-hint" for="catalog-search" data-testid="filter-search-label">Поиск</label>
+        <input
+          id="catalog-search"
+          v-model="query"
+          type="search"
+          class="field-input"
+          placeholder="iPhone, RTX…"
+          data-testid="catalog-search"
+        />
+
+        <p class="filters-hint filters-hint-spaced" data-testid="filter-category-label">Категория</p>
+        <div class="filter-list" data-testid="category-filter-list" role="list">
+          <button
+            type="button"
+            class="filter-item"
+            :class="{ active: !categoryId }"
+            data-testid="filter-category-all"
+            data-filter-type="category"
+            :data-active="!categoryId ? 'true' : 'false'"
+            role="listitem"
+            @click="categoryId = ''"
+          >
+            <span>Все</span>
+          </button>
+          <button
+            v-for="c in categories"
+            :key="c.id"
+            type="button"
+            class="filter-item"
+            :class="{ active: categoryId === c.id }"
+            :data-category-id="c.id"
+            :data-testid="`filter-category-${c.slug}`"
+            data-filter-type="category"
+            :data-active="categoryId === c.id ? 'true' : 'false'"
+            role="listitem"
+            @click="categoryId = c.id"
+          >
+            <span>{{ c.name }}</span>
+          </button>
+        </div>
+
+        <p class="filters-hint filters-hint-spaced" data-testid="filter-brand-label">Бренд</p>
         <div class="filter-list" data-testid="brand-filter-list" role="list">
           <button
             v-for="b in BRANDS"
@@ -155,9 +251,6 @@ onMounted(async () => {
             @click="brand = b.id"
           >
             <span :data-testid="`filter-${b.id}-label`">{{ b.label }}</span>
-            <span class="filter-count" :data-testid="`filter-${b.id}-count`">
-              {{ brandCounts[b.id] ?? 0 }}
-            </span>
           </button>
         </div>
 
@@ -199,15 +292,26 @@ onMounted(async () => {
           <p class="price-bounds" data-testid="price-bounds">
             {{ formatMoney(priceFloor) }} — {{ formatMoney(priceCeil) }}
           </p>
-          <button
-            type="button"
-            class="btn btn-ghost filter-reset"
-            data-testid="price-reset"
-            @click="resetPrice"
-          >
-            Сбросить цену
-          </button>
         </div>
+
+        <label class="filter-check" data-testid="filter-in-stock">
+          <input v-model="inStockOnly" type="checkbox" data-testid="in-stock-checkbox" />
+          Только в наличии
+        </label>
+
+        <p class="filters-hint filters-hint-spaced" data-testid="filter-sort-label">Сортировка</p>
+        <select v-model="sort" class="field-input" data-testid="catalog-sort">
+          <option v-for="s in SORTS" :key="s.id || 'default'" :value="s.id">{{ s.label }}</option>
+        </select>
+
+        <button
+          type="button"
+          class="btn btn-ghost filter-reset"
+          data-testid="filters-reset"
+          @click="resetFilters"
+        >
+          Сбросить фильтры
+        </button>
       </aside>
 
       <section class="catalog-main" data-testid="catalog-main">
@@ -217,19 +321,16 @@ onMounted(async () => {
             <p data-testid="catalog-summary">{{ summary }}</p>
           </div>
         </div>
-        <div
-          class="grid"
-          data-testid="product-grid"
-          :data-count="filtered.length"
-        >
+        <div class="grid" data-testid="product-grid" :data-count="products.length">
           <article
-            v-for="p in filtered"
+            v-for="p in products"
             :key="p.id"
             class="product"
             data-testid="product-card"
             :data-product-id="p.id"
             :data-product-suffix="productIdSuffix(p.id)"
             :data-brand="p.brand || ''"
+            :data-category-id="p.categoryId || ''"
           >
             <ProductImage :product="p" />
             <div class="product-top">
@@ -257,16 +358,27 @@ onMounted(async () => {
                 class="btn btn-primary"
                 data-testid="add-to-cart"
                 :data-product-id="p.id"
-                :disabled="addingId === p.id"
+                :disabled="addingId === p.id || Number(p.stockQuantity ?? 0) <= 0"
                 @click="addToCart(p.id)"
               >
                 В корзину
               </button>
             </div>
           </article>
-          <div v-if="!filtered.length" class="empty" data-testid="catalog-empty">
+          <div v-if="!products.length" class="empty" data-testid="catalog-empty">
             Нет товаров для этих фильтров
           </div>
+        </div>
+        <div v-if="nextPageToken" class="catalog-more">
+          <button
+            type="button"
+            class="btn btn-ghost"
+            data-testid="catalog-load-more"
+            :disabled="loadingMore"
+            @click="fetchProducts({ append: true })"
+          >
+            {{ loadingMore ? "Загрузка…" : "Показать ещё" }}
+          </button>
         </div>
       </section>
     </div>

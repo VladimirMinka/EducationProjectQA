@@ -52,13 +52,34 @@ export function formatMoney(centsValue) {
   }).format(cents(centsValue) / 100);
 }
 
+export const COURIER_FEE_CENTS = 29900;
+export const FREE_DELIVERY_SUBTOTAL_CENTS = 500000;
+
+export function deliveryFeeFor(method, subtotalCents) {
+  if (method === "PICKUP" || method === "DELIVERY_METHOD_PICKUP") return 0;
+  if (method === "COURIER" || method === "DELIVERY_METHOD_COURIER") {
+    return cents(subtotalCents) >= FREE_DELIVERY_SUBTOTAL_CENTS ? 0 : COURIER_FEE_CENTS;
+  }
+  return 0;
+}
+
+function buildQuery(params = {}) {
+  const q = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    q.set(key, String(value));
+  });
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
 let productsCache = null;
 let productsInflight = null;
 
 function listProductsCached() {
   if (productsCache) return Promise.resolve(productsCache);
   if (!productsInflight) {
-    productsInflight = request("/v1/products")
+    productsInflight = request("/v1/products?page_size=50")
       .then((data) => {
         productsCache = data;
         productsInflight = null;
@@ -72,12 +93,23 @@ function listProductsCached() {
   return productsInflight;
 }
 
+export function invalidateProductsCache() {
+  productsCache = null;
+  productsInflight = null;
+}
+
 export const api = {
   register: (payload) =>
     request("/v1/users/register", { method: "POST", body: payload }),
   login: (payload) =>
     request("/v1/users/login", { method: "POST", body: payload }),
-  listProducts: () => listProductsCached(),
+  listProducts: (params) => {
+    if (!params || Object.keys(params).length === 0) {
+      return listProductsCached();
+    }
+    return request(`/v1/products${buildQuery(params)}`);
+  },
+  listCategories: () => request("/v1/categories"),
   getCart: (userId, token) =>
     request(`/v1/users/${userId}/cart`, { token }),
   addItem: (userId, token, productId, quantity = 1) =>
@@ -104,11 +136,30 @@ export const api = {
       method: "DELETE",
       token,
     }),
-  createOrder: (userId, token) =>
+  listAddresses: (userId, token) =>
+    request(`/v1/users/${userId}/addresses`, { token }),
+  createAddress: (userId, token, payload) =>
+    request(`/v1/users/${userId}/addresses`, {
+      method: "POST",
+      token,
+      body: { user_id: userId, ...payload },
+    }),
+  deleteAddress: (userId, token, addressId) =>
+    request(`/v1/users/${userId}/addresses/${addressId}`, {
+      method: "DELETE",
+      token,
+    }),
+  listPickupPoints: () => request("/v1/pickup-points"),
+  createOrder: (userId, token, delivery) =>
     request("/v1/orders", {
       method: "POST",
       token,
-      body: { user_id: userId },
+      body: {
+        user_id: userId,
+        delivery_method: delivery.deliveryMethod,
+        address_id: delivery.addressId || undefined,
+        pickup_point_id: delivery.pickupPointId || undefined,
+      },
     }),
   listOrders: (userId, token) =>
     request(`/v1/users/${userId}/orders`, { token }),

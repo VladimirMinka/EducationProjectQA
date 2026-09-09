@@ -45,6 +45,12 @@ service OrderService {
       get: "/v1/users/{user_id}/orders"
     };
   }
+
+  rpc ListOrderJobs (ListOrderJobsRequest) returns (ListOrderJobsResponse) {
+    option (google.api.http) = {
+      get: "/v1/admin/orders/{order_id}/jobs"
+    };
+  }
 }
 
 enum OrderStatus {
@@ -56,10 +62,30 @@ enum OrderStatus {
   ORDER_STATUS_COMPLETED = 5;
 }
 
+enum DeliveryMethod {
+  DELIVERY_METHOD_UNSPECIFIED = 0;
+  DELIVERY_METHOD_COURIER = 1;
+  DELIVERY_METHOD_PICKUP = 2;
+}
+
 message OrderItem {
   string product_id = 1;
   int32 quantity = 2;
   int64 price_cents = 3;
+}
+
+message DeliveryInfo {
+  string recipient_name = 1;
+  string phone = 2;
+  string city = 3;
+  string street = 4;
+  string building = 5;
+  string apartment = 6;
+  string postal_code = 7;
+  string address_line = 8;
+  string pickup_code = 9;
+  string pickup_address = 10;
+  string work_hours = 11;
 }
 
 message Order {
@@ -69,10 +95,16 @@ message Order {
   int64 total_amount_cents = 4;
   OrderStatus status = 5;
   string created_at = 6;
+  DeliveryMethod delivery_method = 7;
+  int64 delivery_fee_cents = 8;
+  DeliveryInfo delivery_info = 9;
 }
 
 message CreateOrderRequest {
   string user_id = 1;
+  DeliveryMethod delivery_method = 2;
+  string address_id = 3;
+  string pickup_point_id = 4;
 }
 
 message ListOrdersRequest {
@@ -106,3 +138,32 @@ message OrderResponse {
 }
 
 message DeleteOrderResponse {}
+
+enum OrderJobStatus {
+  ORDER_JOB_STATUS_UNSPECIFIED = 0;
+  ORDER_JOB_STATUS_PENDING = 1;
+  ORDER_JOB_STATUS_DONE = 2;
+  ORDER_JOB_STATUS_FAILED = 3;
+  ORDER_JOB_STATUS_CANCELLED = 4;
+}
+
+message OrderJob {
+  string id = 1;
+  string order_id = 2;
+  OrderStatus from_status = 3;
+  OrderStatus to_status = 4;
+  string run_at = 5;
+  OrderJobStatus status = 6;
+  int32 attempts = 7;
+  string last_error = 8;
+  string created_at = 9;
+  string processed_at = 10;
+}
+
+message ListOrderJobsRequest {
+  string order_id = 1;
+}
+
+message ListOrderJobsResponse {
+  repeated OrderJob jobs = 1;
+}
