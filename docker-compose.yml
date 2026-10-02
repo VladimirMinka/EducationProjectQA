@@ -1,27 +1,19 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     environment:
       POSTGRES_USER: store
       POSTGRES_PASSWORD: store
       POSTGRES_DB: store
-    # local-only: меньше fsync, быстрее первый SELECT после старта контейнера.
-    command:
-      - postgres
-      - -c
-      - shared_buffers=128MB
-      - -c
-      - synchronous_commit=off
     ports:
-      - "5432:5432"
+      - "54321:5432"   # <--- ИСПРАВЛЕНО: 5433 снаружи, 5432 внутри
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U store -d store"]
-      interval: 2s
+      test: [ "CMD-SHELL", "pg_isready -U store -d store" ]
+      interval: 5s
       timeout: 5s
-      retries: 15
+      retries: 5
     restart: unless-stopped
 
   store:
