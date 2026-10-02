@@ -32,7 +32,6 @@ def reg_user():
 
     assert delete_response.status_code in (200, 204), f"Не удалось удалить пользователя: {delete_response.text}"
 
-
 def test_registered_user_can_access_profile(reg_user):
     token = reg_user["accessToken"]
     user_id = reg_user["user_id"]
@@ -41,12 +40,9 @@ def test_registered_user_can_access_profile(reg_user):
         f"{BASE_URL}/v1/users/{user_id}",
         headers={"Authorization": f"Bearer {token}"}
     )
-
     assert response.status_code == 200, f"Статус: {response.status_code}, Ответ: {response.text}"
-
     data = response.json()
     assert data["user"]["id"] == user_id, "ID пользователя в ответе не совпадает"
-
 
 def test_add_item_to_cart(reg_user):
     token = reg_user["accessToken"]
