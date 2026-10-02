@@ -17,9 +17,7 @@ def reg_user():
     }
 
     response = requests.post(f"{BASE_URL}/v1/users/register", json=register_data)
-
     assert response.status_code == 200, f"Ошибка регистрации: {response.text}"
-
     response_data = response.json()
     access_token = response_data["accessToken"]
     user_id = response_data["user"]["id"]
@@ -28,7 +26,6 @@ def reg_user():
         "user_id": user_id,
         "accessToken": access_token
     }
-
     delete_url = f"{BASE_URL}/v1/users/{user_id}"
     headers = {"Authorization": f"Bearer {access_token}"}
     delete_response = requests.delete(delete_url, headers=headers)
